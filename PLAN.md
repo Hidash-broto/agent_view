@@ -266,3 +266,186 @@ twice. That is v2.
 - E5 → M3 `doctor`. C5 → the log file. Both accepted into scope.
 - F9 (notification storm) → v2 F2, promoted to CRITICAL and made the core design
   constraint rather than an edge case.
+
+---
+
+# DX REVIEW (Phase 2.5 — /autoplan, DX POLISH)
+
+Product type: **CLI Tool**. Persona: solo developer running 5-10 concurrent Claude
+Code sessions across projects, macOS, already comfortable in a terminal.
+Phase 2 (Design) skipped: 1 UI-scope match ("File layout"), below threshold.
+
+## Developer Journey Map
+
+| # | Stage | Current plan | Friction |
+|---|-------|--------------|----------|
+| 1 | Discover | GitHub README | Crowded lane. Must lead with "22 hours", not "session manager". |
+| 2 | Evaluate | README screenshot | **The screenshot needs a blocked session to exist.** Hard to demo. |
+| 3 | Install | `brew install` | Fine, once the tap exists (M4). |
+| 4 | Hello world | `agentview` | **BROKEN — see D1.** Most likely output is nothing. |
+| 5 | Integrate | `agentview watch` | **UNSPECIFIED — see D2.** No launchd, no start-at-login. |
+| 6 | Debug | `agentview doctor` | Good. Best part of the plan. |
+| 7 | Upgrade | brew upgrade | Daemon restart unhandled. Stale daemon keeps running old code. |
+| 8 | Scale | n/a | Single user, single machine. Correctly out of scope. |
+| 9 | Uninstall | **absent** | Daemon + `~/.agentview/` + launchd entry, no removal path. |
+
+## Developer Empathy Narrative
+
+> I read "nothing tells you an agent has been blocked for 22 hours" and I recognize
+> it instantly, because that happened to me last Tuesday. I install it. I run
+> `agentview`.
+>
+> Nothing happens.
+>
+> Well — it prints nothing, or maybe "0 waiting." I don't know if it's working or if
+> it's broken. I don't have a blocked session right now, because I'm sitting here
+> paying attention. The only way to see this tool do its thing is to go create the
+> exact problem I installed it to avoid, then wait five minutes.
+>
+> So I run it again. Still nothing. I check the README. It says run `agentview watch`.
+> I do. It prints nothing and... does it stay running? Did it fork? If I close this
+> terminal does it die? Is it going to start when I reboot? I don't know.
+>
+> I close the terminal. The daemon dies. Three days later an agent sits blocked for
+> nine hours and nothing tells me, because the tool I installed to fix that has not
+> been running since Tuesday.
+
+That narrative is the whole DX review. Two findings follow from it.
+
+## D1 — CRITICAL: the empty state IS the default state
+
+A monitoring tool whose value moment requires a failure to already be happening has
+no hello world. On a healthy machine `agentview` prints nothing useful, which is
+indistinguishable from broken.
+
+**Fix (accepted into scope, P1 + P5):** `agentview` with zero blocked sessions must
+still prove it works, by showing what it is watching.
+
+```
+$ agentview
+
+  ✓ Nothing blocked.
+
+  Watching 7 sessions:
+    busy  2   terminal-with-tab-name, billing
+    idle  5   erp, billing, back-end-server, ...
+
+  Longest wait today: erp-00, 26h (answered 12m ago)
+```
+
+Three jobs in one screen: confirms it works, shows the data pipeline is live, and
+the "longest wait today" line makes the value legible on a good day. That last line
+is the magical moment for this product, and it costs one persisted counter.
+
+## D2 — CRITICAL: daemon lifecycle is entirely unspecified
+
+The plan says "M2 — `agentview watch` (the daemon)" and stops. A daemon a user must
+remember to start is the same failure class as a dashboard a user must remember to
+open, which is the exact thing C1 killed v1 for. **v2 reintroduces its own bug.**
+
+**Fix (accepted into scope):** the daemon must install itself.
+
+| Command | Does |
+|---|---|
+| `agentview watch` | run in foreground, Ctrl-C to stop. For trying it. |
+| `agentview start` | write `~/Library/LaunchAgents/dev.agentview.plist`, `launchctl load`. Survives reboot. |
+| `agentview status` | is it running, since when, pid, last poll, sessions seen |
+| `agentview stop` | unload, keep the plist |
+| `agentview uninstall` | unload, remove plist, remove `~/.agentview/`, print what it removed |
+
+`agentview status` also answers "is it alive" from D-narrative paragraph 3, and
+covers the brew-upgrade staleness gap in journey stage 7.
+
+## D3 — HIGH: `mute <id>` demands an id the user does not have
+
+At the moment of annoyance the user is looking at a notification, not a terminal, and
+does not know any session id. A UUID is the wrong affordance.
+
+**Fix:** mute by human name, which is already in the data (`name`, e.g. `erp-00`),
+with prefix matching: `agentview mute erp`. Bare `agentview mute` with no argument
+mutes the session that most recently notified, which is the one that just annoyed you.
+
+## D4 — HIGH: no error strings are specified anywhere
+
+Every failure mode in the plan names a condition and a response, and none of them say
+what the user reads. Per DX principle 5, every error needs problem + cause + fix.
+
+| Condition | String |
+|---|---|
+| `~/.claude/sessions/` absent | `agentview: can't find ~/.claude/sessions/`<br>`Claude Code writes this directory from v2.1.x. Yours may be older, or set CLAUDE_CONFIG_DIR.`<br>`Falling back to 'claude agents --json' — durations will be unavailable.`<br>`Run 'agentview doctor' for details.` |
+| Shape drift after upgrade | `agentview: ~/.claude/sessions/ no longer has 'statusUpdatedAt'.`<br>`A Claude Code update probably changed the format. Durations are off until this is fixed.`<br>`Please report at <repo>/issues with the output of 'agentview doctor'.` |
+| Daemon already running | `agentview: already running (pid 4821, started 3h ago).`<br>`Use 'agentview status' to check it, or 'agentview stop' first.` |
+
+## D5 — MEDIUM: thresholds are hardcoded guesses with no escape hatch
+
+5m/30m/2h/8h/daily is admitted in the plan as a guess. DX principle 4 says decide for
+me, let me override. **Fix:** read `~/.agentview/config.json` if it exists, ignore it
+if it does not. Five lines, no config command, no docs burden at v0.1.0.
+
+**TASTE DECISION** — surfaced at the gate. P5 (simpler) argues for shipping the
+guess alone and letting a week of real use pick the numbers.
+
+## D6 — MEDIUM: trust surface is undocumented
+
+It reads another tool's internal files, runs a background daemon, and writes to the
+home directory. A cautious developer needs that stated before installing.
+
+**Fix:** README section, exact wording:
+- **Reads:** `~/.claude/sessions/*.json` (state only), `ps` (liveness). Never your transcripts, prompts, or code.
+- **Writes:** `~/.agentview/` (state, log), one launchd plist.
+- **Sends:** nothing. No network calls. Verify with `grep -r fetch src/`.
+
+That last clause is the trust move: an invitation to check rather than a promise.
+
+## Notification copy
+
+The plan never writes the notification. It is the entire user-facing surface of M2.
+
+| When | Title | Body |
+|---|---|---|
+| t+5m | `erp is waiting` | `input needed · 5m` |
+| t+30m | `erp still waiting` | `input needed · 30m` |
+| t+2h | `erp waiting 2h` | `input needed since 09:14` |
+| t+8h+ | `erp waiting 8h` | `input needed since 09:14. Still there.` |
+
+Switch from relative to absolute time at the 2h step. "Waiting 8h" is abstract;
+"since 09:14" tells you it has been there since before lunch and lands harder.
+
+## TTHW Assessment
+
+| | Time | Tier |
+|---|---|---|
+| Current plan | **unbounded** — requires a blocked session to exist | Red Flag |
+| With D1 | ~30 seconds to proof-of-life | Champion |
+| To first real value | 5m-8h (first genuine block) | inherent to the product |
+
+The product cannot shorten time-to-first-real-value; that is set by when you next get
+blocked. It absolutely can shorten time-to-confidence, and D1 is how.
+
+## DX Scorecard
+
+| # | Dimension | Score | Note |
+|---|-----------|-------|------|
+| 1 | Getting started / TTHW | **2/10** | empty state reads as broken (D1) |
+| 2 | CLI naming & ergonomics | 6/10 | verbs fine; `mute <id>` wrong (D3); lifecycle verbs missing (D2) |
+| 3 | Error messages | **1/10** | zero strings specified (D4) |
+| 4 | Docs | 3/10 | no README plan; trust section absent (D6) |
+| 5 | Upgrade path | 3/10 | stale daemon after brew upgrade unhandled |
+| 6 | Escape hatches | 4/10 | thresholds hardcoded (D5) |
+| 7 | Debuggability | **8/10** | `doctor` is the strongest part of the plan |
+| 8 | Trust & uninstall | 2/10 | no uninstall path at all (D2, D6) |
+
+**Overall DX: 3.6/10** before fixes. With D1-D4 accepted: **7.5/10**.
+
+**Highest-leverage single change: D1.** Everything else is polish on a tool the
+developer has already decided is broken thirty seconds after installing it.
+
+## DX Implementation Checklist
+
+- [ ] D1 empty state with watch-list and "longest wait today" (M1)
+- [ ] D2 `start` / `status` / `stop` / `uninstall` + launchd plist (M2)
+- [ ] D3 mute by name prefix; bare `mute` targets last notifier (M2)
+- [ ] D4 the three error strings above, verbatim (M1-M2)
+- [ ] D5 optional `~/.agentview/config.json`, read-if-exists (M2) — TASTE
+- [ ] D6 README trust section (M4)
+- [ ] Notification copy table, including the 2h switch to absolute time (M2)
