@@ -68,17 +68,36 @@ Two rules that make it work rather than become noise:
 
 Prints blocked sessions sorted by duration, longest first. Exits.
 
+The honest output on this machine right now is ONE row, not three. The earlier mock
+in this plan showed a state the machine has never been in. Real:
+
 ```
 $ agentview
 
-  BLOCKED 22h  erp-00                    input needed
-  BLOCKED  6h  billing-a3             input needed
-  blocked  4m  billing-4e             input needed
+  BLOCKED 26h  acme/erp  erp-00        input needed since Mon 09:45
 
-  3 waiting. Oldest 22h.
+  1 waiting. Also 3 idle over 3h (--idle to show).
 ```
 
-Nothing else. No TUI, no focus, no attach. This is the whole M1.
+Empty state must prove it works, because zero-blocked is the normal case:
+
+```
+$ agentview
+  Nothing waiting for input.
+
+  7 Claude sessions running - 2 busy, 5 idle
+  Longest idle: acme-api, 3h (finished, no prompt since)
+
+  agentview watch    notify me when one blocks
+  agentview doctor   check notifications actually work
+```
+
+**Idle is neglect too.** Measured: `acme-api-47` idle 190m and
+`erp-0e` idle 187m. Both finished and are sitting there. A `waiting`-only filter shows
+1 row where the user perceives 4 neglected sessions. Add a second, quieter ladder for
+`idle > 4h`. Costs one enum value.
+
+No TUI, no attach. That is the whole M1.
 
 ### M2 — `agentview watch` (the daemon)
 
@@ -101,6 +120,12 @@ personal use.** Not before.
 
 Smaller than v1, because duration needs less than identity does.
 
+**SAFETY: `~/.claude/sessions/` is `drwx------` and contains 10 `*.key` files at
+`0600`, interleaved with the JSON.** Glob `*.json` only, never `*`. Add a test that
+asserts no path ending `.key` is ever opened. The README must state this before
+anything else, because "reads your Claude credentials directory" is what a cautious
+reader will assume otherwise.
+
 **Required fields, all from `~/.claude/sessions/<pid>.json`:**
 
 | Field | Use | Verified |
@@ -113,10 +138,18 @@ Smaller than v1, because duration needs less than identity does.
 | `sessionId` | mute key, title lookup | yes |
 | `cwd` | disambiguation | yes |
 
-**Title is optional here, which is the point.** v1 needed the transcript join to be
-useful. v2 does not: `erp-00` plus `blocked 22h` is already actionable. Title lookup
-becomes a nice-to-have (M1.5), not a dependency, which deletes `titles.ts`, the slug
-derivation, the head-vs-tail scan bug, and seven tests.
+**Title: REVERSED after DX review.** This plan claimed `erp-00` plus `blocked 22h`
+was actionable on its own. Measured on this machine, it is not:
+
+```
+erp-00   waiting  1610m   <- the blocked one
+erp-0e   idle      187m   <- differs by ONE character
+billing-a3 / -bd / -d6 <- three collisions in one repo
+```
+
+At 3am, `erp-00` and `erp-0e` are a coin flip. **`cwd` basename is mandatory in every
+row and every notification** (`acme/erp`, not `erp-00`). The transcript title join
+returns as M1.5, optional but valuable; the cwd is not optional.
 
 **Source fallback:** if `~/.claude/sessions/` is absent or its shape has drifted, fall
 back to `claude agents --json`, which carries `status` but **not** `statusUpdatedAt`.
@@ -201,7 +234,7 @@ function isMuted(sessionId: string, now: number): boolean
 |---|---|---|---|
 | F1 | `~/.claude/sessions/` shape drifts after a CC upgrade | HIGH | validate on read; degrade to CLI; `doctor` names it |
 | F2 | Notification storm | **CRITICAL** | escalating ladder + `lastNotifiedAt` in state. A tool that spams gets muted, and muted returns you to 22h. This is the failure that kills the product. |
-| F3 | User mutes globally and forgets | HIGH | no global mute exists. Per-session, 24h expiry only. |
+| F3 | User mutes globally and forgets | **CRITICAL** | **CORRECTED.** The claim "no global mute exists" was false. macOS ships one: System Settings > Notifications > <app> > Off, invisible to us and permanent. Refusing an in-product mute does not remove the mute, it moves it somewhere undetectable. Response: own the bundle id (N1), detect non-delivery (N2), and offer `agentview snooze <name> 4h` so the escape hatch is one we control and that expires. |
 | F4 | Daemon dies silently | HIGH | `~/.agentview/agentview.log` + our own heartbeat in `~/.agentview/state.json`. **Not** `updatedAt`: measured `updatedAt === statusUpdatedAt` in 7/7 live files (delta 0), so it is a transition timestamp too, not a liveness signal. An idle session's `updatedAt` is hours stale by design. |
 | F5 | Two daemons running | MEDIUM | lockfile at `~/.agentview/watch.lock` |
 | F6 | Clock skew / sleep | MEDIUM | durations from wall clock; a laptop asleep 8h correctly shows 8h |
@@ -485,3 +518,135 @@ is occupied is process theater. The user chose the narrowing explicitly.
 | T1 | Language | TypeScript on Bun | Go + Bubble Tea | You install Go tonight. Better long-term TUI ecosystem, but v2 has no TUI, so the advantage is mostly gone. |
 | T2 | Milestone order | notify-first (Approach C) | TUI/list-first | You get a screenshot sooner for the README, and the 22h fix later. |
 | T3 | Config escape hatch (D5) | ship optional config.json | hardcode the guess | Hardcoding forces you to feel the wrong thresholds, which is how you learn the right ones. Genuinely defensible. |
+
+---
+
+# DX DUAL VOICES — outside review + consensus
+
+Codex: `[codex-unavailable: binary not found]`. Claude subagent ran. Tag: `[subagent-only]`.
+
+```
+DX DUAL VOICES — CONSENSUS TABLE
+═══════════════════════════════════════════════════════════════════
+  Dimension                          Primary  Subagent  Consensus
+  ──────────────────────────────────  ───────  ────────  ─────────
+  1. Getting started < 5 min?         no 2/10  no 4/10   CONFIRMED (fails)
+  2. CLI naming guessable?            no 6/10  no 4/10   CONFIRMED (fails)
+  3. Error messages actionable?       no 1/10  no 2/10   CONFIRMED (fails)
+  4. Docs findable & complete?        no 3/10  no 3/10   CONFIRMED (fails)
+  5. Upgrade path safe?               no 3/10  no 1/10   CONFIRMED (fails)
+  6. Dev environment friction-free?   no 4/10  no 3/10   CONFIRMED (fails)
+═══════════════════════════════════════════════════════════════════
+6/6 CONFIRMED. Zero disagreements. Overall: primary 3.6/10, subagent 3.0/10.
+```
+
+Both voices independently reached the same verdict: the detection half is sound and
+the telling half is unbuilt. 269 lines about detecting neglect, four about telling
+the user, and the telling is the entire product.
+
+## Findings the outside voice caught that the primary pass missed
+
+All verified against this machine before acceptance.
+
+**N1 — CRITICAL: the notification is misattributed.** `osascript -e 'display
+notification'` delivers under `com.apple.scripteditor2`. Every escalation arrives as
+**Script Editor**, with Script Editor's icon, and appears in System Settings under a
+name the user never installed. A product whose value is *trustworthy repeated
+interruption* cannot be anonymous.
+**Fix, accepted:** ship a minimal `agentview.app` bundle in the formula (~40KB:
+`Info.plist` + helper), own bundle id `dev.<you>.agentview`, post through it.
+
+**N2 — CRITICAL: `osascript` exits 0 whether or not the notification displayed.**
+Notifications off, Focus filtering, or alert style "None" all produce silent success.
+The daemon writes "notified erp-00 at 8h" to its log and the user saw nothing.
+**F4 was the wrong worry: the daemon living silently is worse than dying, because the
+log lies.**
+**Fix, accepted:** `agentview doctor` performs a delivery round-trip — post with a
+known identifier, read it back, confirm `presented=1`, exit non-zero with the System
+Settings deep link if it cannot. Also read `~/Library/DoNotDisturb/DB/Assertions.json`
+and report an active Focus.
+
+**N3 — CRITICAL: F3 was false.** See the corrected failure table above.
+
+**N4 — HIGH: Focus swallows exactly the case this was built for.** "You were asleep
+or in a meeting" is precisely when DND is on. `display notification` cannot request
+`interruptionLevel: .timeSensitive`; an app bundle can.
+**Fix, accepted:** request Time Sensitive from the bundle; on wake, re-post the
+highest rung rather than counting a suppressed notification as delivered.
+
+**N5 — HIGH: fan-out storm.** F2 covers repeat-over-time, not seven sessions crossing
+a rung in the same minute. Seven simultaneous banners is a plausible Monday.
+**Fix, accepted:** coalesce to one notification per tick. Individual only when count
+is 1.
+
+**N6 — HIGH: the notification is a dead end.** Clicking it opens Script Editor. The
+tty for the blocked pid is one `ps -o tty` away.
+**Fix, accepted:** click focuses the terminal window for that pid. v2 excluded focus
+as "already shipped by claude-code-monitor" — that is a competitive argument, not a
+DX one. Do not ship an interruption with no resolution. Reuse, do not rebuild.
+
+**Q1 — `quiet_hours`, the best idea in the review.** Let the ladder keep counting
+overnight and deliver one honest *"erp-00 waited 9h overnight"* at 07:30, instead of
+a 3am banner into a silenced Focus. That is this product's best moment and the plan
+missed it entirely. **Accepted.**
+
+**Q2 — drop or default-off the 5m rung.** Five minutes is a coffee, not neglect, and
+it is the rung most likely to fire during active work and trigger the mute that kills
+the product. Ladder becomes `30m / 2h / 8h / daily`. **Accepted.**
+
+**Q3 — `brew services`.** Already in use on this machine for redis. Ship a formula
+with a `service do` block so `brew services start agentview` works. **Accepted**,
+alongside `agentview start` for non-brew installs.
+
+**Q4 — binary size and Gatekeeper.** `bun build --compile` emits 50-100MB. Via a
+formula it runs; via a hand-downloaded release tarball it is quarantined
+("developer cannot be verified"). **Accepted:** state the size in the README and
+include the `xattr -d com.apple.quarantine` line before someone files it as a bug.
+
+**Q5 — `mute` → `snooze <name> <duration>`.** "Mute" implies the permanence the
+design explicitly refuses to grant. **Accepted**, with name-prefix resolution,
+ambiguity errors, and the resolved target echoed back:
+`Snoozed erp-00 (c7dca696) until 18:31.`
+
+## Corrections to the primary DX pass
+
+| Primary claim | Corrected |
+|---|---|
+| "Title is optional; `erp-00` + `22h` is actionable" | False. `erp-00` vs `erp-0e` differ by one character and one is the blocked one. cwd is mandatory. |
+| M1 mock showing 3 blocked sessions | Fabricated. One session is `waiting`. Mock replaced with the real single row. |
+| F3 "no global mute exists" | False. macOS ships one and it is invisible to us. |
+| D4 error strings | Superseded by the outside voice's versions, which state what the *user loses* rather than what broke internally. |
+
+## Revised DX scorecard
+
+| # | Dimension | Before | After accepted fixes |
+|---|-----------|--------|----------------------|
+| 1 | Getting started / TTHW | 2 | 8 (`doctor --demo` makes it 60 verifiable seconds) |
+| 2 | CLI naming & ergonomics | 4 | 8 (lifecycle verbs, `snooze`, `logs`, `--json`) |
+| 3 | Error messages | 1 | 8 |
+| 4 | Docs | 3 | 7 (trust section, `.key` statement, uninstall) |
+| 5 | Upgrade path | 1 | 7 (`brew services`, `status` shows staleness) |
+| 6 | Escape hatches | 4 | 8 (config.toml with `quiet_hours`) |
+| 7 | Debuggability | 8 | 9 (`doctor` gains the delivery round-trip) |
+| 8 | Trust & uninstall | 2 | 8 (`uninstall` command, `.key` glob + test) |
+| 9 | Notification text | 2 | 8 (absolute time, project, next action) |
+
+**Overall DX: 3.0/10 → 7.9/10 with all accepted fixes.**
+
+## Highest-leverage change (both voices agree)
+
+**Own the notification and prove it landed.** A signed `agentview.app` bundle with its
+own bundle id, a Snooze action button, click-to-focus-the-tty, and a `doctor` that
+posts a test notification and reads it back to confirm delivery.
+
+That single change fixes N1, N2, N3, N4, N6, and the snooze scavenger hunt, and turns
+TTHW from unbounded into sixty verifiable seconds. Everything else is downstream of
+the fact that today this product's only output is anonymous, silently droppable, and
+leads nowhere.
+
+## Phase 2.5 complete
+
+> DX overall: 3.0/10 → 7.9/10 with fixes. TTHW: unbounded → ~60s.
+> Codex: unavailable. Claude subagent: 15 findings, 5 critical.
+> Consensus: 6/6 confirmed, 0 disagreements.
+> Passing to Phase 3 (Eng Review).
