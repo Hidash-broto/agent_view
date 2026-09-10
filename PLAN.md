@@ -1,468 +1,268 @@
-# PLAN: agentview v0.1.0
+# PLAN: agentview — the neglect detector
 
-Design doc: `~/.gstack/projects/terminal-with-tab-name/hidash-unknown-design-20260910-071553.md` (APPROVED)
+Design doc: `~/.gstack/projects/terminal-with-tab-name/hidash-unknown-design-20260910-071553.md`
 Branch: main
-Status: DRAFT — under /autoplan review
+Status: DRAFT v2 — v1 killed at the /autoplan CEO gate, see Review History
+Stack: TypeScript on Bun, `bun build --compile`
 
-## What we're building
+## The one sentence
 
-A terminal UI that lists every live Claude Code session with a **real name**, its
-**state**, and **how long it has been in that state**, and lets you jump to the
-window running it.
+**Nothing tells you an agent has been blocked for 22 hours.**
 
-The product is one join: session state (which already exists) against session
-identity (which exists but is not surfaced).
+Every incumbent alerts at the *moment* a session blocks. If you are asleep, in a
+meeting, or looking at another window, that alert is spent and nothing ever raises
+it again. agentview answers the question none of them ask: *what have I abandoned?*
 
-## Stack decision
+Measured on this machine, 2026-09-10: `erp-00` sat in `status: "waiting"`,
+`waitingFor: "input needed"` for **1367 minutes**. Re-measured 4.5 hours later during
+this same planning session: **1603 minutes**, still waiting, still unmentioned by
+anything. The pain compounds silently, which is exactly the shape of the gap.
 
-**TypeScript on Bun**, shipped as a standalone binary via `bun build --compile`.
+## What this is NOT
 
-This reverses the design doc's Go recommendation, on evidence gathered after it was
-written: `go` and `cargo` are **not installed** on this machine; `bun 1.3.13` and
-`node v22.22.3` are. The doc preferred Go only for the single-static-binary
-distribution story and dismissed TypeScript because it "drags Node along as a runtime
-dependency." `bun build --compile --outfile=agentview ./src/cli.ts` produces a
-standalone executable, which voids that objection. Same distribution story, zero
-toolchain install.
+Not a session manager. That lane has five active projects and we are not entering it.
 
-TUI layer: raw ANSI to start (M2-M3). Ink is a fallback if hand-rolled rendering
-gets unpleasant, not a starting assumption. See Open Question 2.
+| Already shipped, do not rebuild | By |
+|---|---|
+| Session list, states, TUI | Agent of Empires (3.2k★), agent-deck (863★) |
+| Title sync from Claude's session name | agent-deck (`push_title`, `--title-lock`) |
+| `~/.claude/sessions/<pid>.json` PID→session join | Recon |
+| Cross-terminal window focus (iTerm2/Terminal.app/Ghostty) | claude-code-monitor |
+| Alert at the moment of blocking | Claude Code Notifier |
+| Backgrounded session management | `claude agents`, first-party |
+
+**The gap: duration, and re-surfacing.** Nobody sorts by how long you have ignored
+something, and nobody tells you twice.
+
+## Core design: escalation, not notification
+
+A notification fired once is a notification you can miss. The entire product is the
+refusal to fire once.
+
+```
+  session enters `waiting`
+        |
+        v
+  t+5m   ── quiet notice ──────────  "erp is waiting"
+        |
+  t+30m  ── notice again ──────────  "erp waiting 30m"
+        |
+  t+2h   ── escalate ──────────────  "erp waiting 2h"
+        |
+  t+8h   ── escalate ──────────────  "erp waiting 8h. Still there."
+        |
+  daily  ── keeps escalating ──────  until answered or dismissed
+```
+
+Two rules that make it work rather than become noise:
+
+1. **Escalating intervals, never fixed.** A 5-minute repeat is spam and gets muted.
+   Muting returns you to 22 hours. Intervals grow: 5m, 30m, 2h, 8h, then daily.
+2. **Dismissal is per-session and expires.** `agentview mute <id>` silences one
+   session for 24h, not forever. There is no global mute; a tool you can permanently
+   silence is a tool that will be permanently silenced.
 
 ## Milestones
 
-### M0 — Verification gate (BLOCKING, no code)
+### M1 — `agentview` (one shot)
 
-Three checks that can each invalidate work below. Do these first.
+Prints blocked sessions sorted by duration, longest first. Exits.
 
-| # | Check | If it fails |
+```
+$ agentview
+
+  BLOCKED 22h  erp-00                    input needed
+  BLOCKED  6h  billing-a3             input needed
+  blocked  4m  billing-4e             input needed
+
+  3 waiting. Oldest 22h.
+```
+
+Nothing else. No TUI, no focus, no attach. This is the whole M1.
+
+### M2 — `agentview watch` (the daemon)
+
+Escalation ladder above. macOS notification via `osascript`. Writes
+`~/.agentview/agentview.log`. Survives `claude` restarts and Claude Code upgrades.
+
+### M3 — `agentview doctor`
+
+Self-check: does `~/.claude/sessions/` exist, does its shape still carry
+`status` and `statusUpdatedAt`, does `claude agents --json` agree on the pid set.
+Prints a diagnosis, exits non-zero on drift. This is the insurance policy for
+building on an undocumented internal path.
+
+### M4 — Release
+
+`bun build --compile`, Actions on tag, Homebrew tap. **Gated on one week of daily
+personal use.** Not before.
+
+## Data layer
+
+Smaller than v1, because duration needs less than identity does.
+
+**Required fields, all from `~/.claude/sessions/<pid>.json`:**
+
+| Field | Use | Verified |
 |---|---|---|
-| M0.1 | Run `claude agents` (no `--json`) in a real TTY. Does it show real titles? | If yes, agentview's differentiator drops to time-in-state + jump-to-window. Rewrite the README pitch, keep the build. |
-| M0.2 | Put a session into a permission prompt. Time how long until `status` flips to `waiting` in `~/.claude/sessions/<pid>.json`. | If > 2s, success criterion 4 is unmeetable as written. Relax it or move to the `Notification` hook. |
-| M0.3 | Confirm `~/.claude/sessions/` exists and matches `claude agents --json` on a second machine or after a Claude Code upgrade. | If it diverges, demote Source 0 to opportunistic and make the CLI primary. |
+| `status` | `waiting` is the only state we act on | yes, 6/6 live files |
+| `statusUpdatedAt` | **the product.** now - this = duration | yes |
+| `waitingFor` | shown verbatim | yes, `"input needed"` |
+| `pid` | liveness check via `ps -p` | yes |
+| `name` | fallback label | yes |
+| `sessionId` | mute key, title lookup | yes |
+| `cwd` | disambiguation | yes |
 
-**M0 is a gate, not a suggestion.** Every milestone below assumes all three pass.
+**Title is optional here, which is the point.** v1 needed the transcript join to be
+useful. v2 does not: `erp-00` plus `blocked 22h` is already actionable. Title lookup
+becomes a nice-to-have (M1.5), not a dependency, which deletes `titles.ts`, the slug
+derivation, the head-vs-tail scan bug, and seven tests.
 
-### M1 — The join, as a library
-
-`sessions()` returns the fully resolved list. This is the entire product; everything
-after M1 is a view over it.
-
-### M2 — Static render
-
-`agentview` prints the sorted table once and exits. Verifies sort order, the title
-fallback chain, and time-in-state against real sessions before any loop exists.
-
-### M3 — Live TUI
-
-Alt-screen, 250ms poll, keyboard nav.
-
-### M4 — Jump to session
-
-`Enter` focuses the Terminal.app window running the selected session.
-
-### M5 — Notifications
-
-Fire on transition into `waiting`. Never on steady state.
-
-### M6 — Release
-
-`bun build --compile`, GitHub Actions on tag, Homebrew tap.
+**Source fallback:** if `~/.claude/sessions/` is absent or its shape has drifted, fall
+back to `claude agents --json`, which carries `status` but **not** `statusUpdatedAt`.
+Degraded mode shows "blocked (duration unknown, since agentview started)" and says so.
+Never fabricate a duration.
 
 ## File layout
 
 ```
 src/
-  cli.ts                  entry; arg parsing; dispatch to render or watch
-  sessions/
-    types.ts              Session, SessionState, TitleSource
-    sources.ts            Source 0 (~/.claude/sessions) + Source 1 (claude agents --json)
-    titles.ts             transcript lookup + fallback chain
-    index.ts              sessions(): the join. The product.
-  focus/
-    terminal.ts           AppleScript window focus by tty
-  ui/
-    format.ts             row formatting, truncation, disambiguation
-    render.ts             static table (M2)
-    watch.ts              alt-screen loop + keys (M3)
-  notify/
-    notify.ts             transition detection + macOS notification (M5)
+  cli.ts              arg parsing: (none) | watch | doctor | mute <id>
+  sessions.ts         read Source 0, validate shape, filter dead pids, fallback
+  duration.ts         humanize, escalation ladder, next-notify-at
+  state.ts            ~/.agentview/state.json — last-notified, mutes
+  notify.ts           osascript wrapper
+  doctor.ts           shape + agreement checks
 test/
-  sources.test.ts
-  titles.test.ts
   sessions.test.ts
-  format.test.ts
-  fixtures/               copied real jsonl tails + sessions json, anonymized
+  duration.test.ts
+  state.test.ts
+  fixtures/
 ```
 
-## Types
-
-```ts
-type SessionStatus = 'waiting' | 'busy' | 'idle';
-type TitleSource   = 'custom' | 'ai' | 'prompt' | 'derived';
-
-interface Session {
-  sessionId: string;
-  pid: number;
-  cwd: string;
-  kind: 'interactive' | 'background';
-  status: SessionStatus;
-  waitingFor?: string;
-  statusUpdatedAt: number;   // ms epoch; from Source 0
-  startedAt: number;
-  title: string;
-  titleSource: TitleSource;  // 'derived' means we have no real name
-  tty?: string;              // absent for background sessions
-  transcriptPath?: string;
-}
-```
+Seven source files. v1 had eleven for a bigger idea.
 
 ## Function contracts
 
-### `sources.ts`
-
 ```ts
-// Source 0. Reads ~/.claude/sessions/*.json. ~2ms.
-// Filters out entries whose pid is no longer alive.
-async function readSessionDir(): Promise<RawSession[]>
+interface Blocked {
+  sessionId: string;
+  pid: number;
+  name: string;
+  cwd: string;
+  waitingFor: string;
+  blockedSince: number;      // ms epoch, from statusUpdatedAt
+  blockedMs: number;         // now - blockedSince
+  durationKnown: boolean;    // false in CLI-fallback mode
+}
 
-// Source 1. Spawns `claude agents --json`. ~140ms. Fallback + reconcile.
-async function readAgentsCli(): Promise<RawSession[]>
+// Blocked sessions only, sorted by blockedMs desc. Dead pids excluded.
+async function blocked(): Promise<Blocked[]>
 
-// Primary entry. Source 0 with Source 1 reconcile every RECONCILE_MS (30_000).
-// If Source 0 is missing or its shape fails validation, falls back to Source 1
-// permanently for the process lifetime and logs once.
-async function readSessions(opts?: { forceCli?: boolean }): Promise<RawSession[]>
-```
+// 1367*60000 -> "22h"; 369*60000 -> "6h"; 4*60000 -> "4m"; 30000 -> "now"
+function humanize(ms: number): string
 
-### `titles.ts`
+// The ladder. Returns the next notify timestamp given how long it has been
+// blocked and when we last notified. null = do not notify yet.
+function nextNotifyAt(blockedMs: number, lastNotifiedMs: number | null): number | null
 
-```ts
-// Fast path: derive slug per cli.js rule -> [^a-zA-Z0-9] => '-', 200-char cap.
-// Correctness path: glob ~/.claude/projects/*/<sessionId>.jsonl at depth 2 only
-// (depth 2 skips subagents/ and memory/).
-async function findTranscript(sessionId: string, cwd: string): Promise<string | null>
-
-// Fallback chain. custom-title (TAIL scan) > ai-title (HEAD scan) > last-prompt
-// (TAIL scan) > null. ai-title is immutable once written, so it is cached
-// permanently by sessionId and never re-read.
-async function resolveTitle(sessionId: string, cwd: string):
-  Promise<{ title: string; source: TitleSource } | null>
-```
-
-### `index.ts`
-
-```ts
-// The join. Everything else is a view over this.
-async function sessions(): Promise<Session[]>
-```
-
-### `format.ts`
-
-```ts
-// Strips a leading slash-command token and renders it as a prefix:
-// "/plan-eng-review shall we plan this" -> "plan-eng-review · shall we plan this"
-function formatPromptTitle(raw: string, width: number): string
-
-// If two visible rows would render identical text, append cwd basename to both.
-// Runs over the whole visible set, not per row.
-function disambiguate(rows: Session[]): Row[]
-
-// 1367 -> "22h", 369 -> "6h9m", 4 -> "4m", 0 -> "now"
-function humanizeMinutes(mins: number): string
+// Per-session, 24h expiry. No global mute by design.
+function isMuted(sessionId: string, now: number): boolean
 ```
 
 ## Test plan
 
-Fixtures are anonymized copies of real records from this machine, committed under
-`test/fixtures/`. No network, no live `claude` spawn in unit tests.
-
-**`titles.test.ts`**
-1. `custom-title` at line 1346 of 1353 wins over `ai-title` at line 450. Guards the
-   head-vs-tail scan bug directly.
-2. `ai-title` repeated 121 times with one unique value resolves to that value.
-3. Session with no `ai-title` and a `last-prompt` resolves to `source: 'prompt'`.
-4. Session with a `last-prompt` record **missing the `lastPrompt` field** (9 of 4029
-   real records are like this) does not throw and falls through to `derived`.
-5. Path `/tmp/my_app.v2 test` maps to `-private-tmp-my-app-v2-test`, not
-   `-tmp-my_app.v2 test`. Guards the wrong slug rule.
-6. A cwd whose slug exceeds 200 chars is NOT resolved by derivation; the glob path
-   finds it instead.
-7. Glob does not match `<project>/<sessionId>/subagents/agent-*.jsonl`.
-
-**`sources.test.ts`**
-8. A `~/.claude/sessions/<pid>.json` whose pid is dead is excluded.
-9. Source 0 missing entirely falls back to Source 1 and logs once, not per tick.
-10. Source 0 present but missing `statusUpdatedAt` (shape drift after an upgrade)
-    degrades to no-time-in-state rather than crashing.
-11. Source 0 and Source 1 disagreeing on the pid set trusts Source 1 and logs.
-
-**`format.test.ts`**
-12. Two sessions both titled `/office-hours ...` in different cwds render distinctly.
-13. Two sessions with the **same** title in the **same** cwd still render distinctly.
-14. A 200-char title truncates without breaking the column layout.
-15. `humanizeMinutes` boundaries: 0, 1, 59, 60, 61, 1439, 1440.
+**`duration.test.ts`** — the product logic, tested hardest.
+1. `humanize` boundaries: 0, 59s, 60s, 59m, 60m, 1h59m, 2h, 23h59m, 24h, 1367m.
+2. Ladder fires at 5m and not at 4m59s.
+3. Ladder does not re-fire at 6m when last notified at 5m.
+4. Ladder fires at 30m, 2h, 8h, then every 24h and not more often.
+5. A session blocked 22h with no prior notification fires immediately, once, then
+   follows the daily cadence. Guards the "agentview started after the block" case.
+6. Ladder never returns a timestamp in the past.
 
 **`sessions.test.ts`**
-16. Full join over fixtures produces correct sort: waiting, then busy, then idle.
-17. A `kind: 'background'` session has no `tty` and is marked unfocusable.
-18. Two sessions reporting the same tty are both marked unfocusable.
+7. Only `status: "waiting"` rows are returned; `busy` and `idle` excluded.
+8. Dead pid excluded even though its file exists.
+9. `statusUpdatedAt` missing → `durationKnown: false`, no crash, no fabricated time.
+10. `~/.claude/sessions/` absent → CLI fallback, `durationKnown: false`, logged once.
+11. Malformed JSON in one file does not prevent the other files from being read.
+12. Sort is strictly by `blockedMs` desc, ties broken by `sessionId` for stability.
 
-**Not unit tested, verified manually in M0/M4:** AppleScript focus, notification
-delivery, real-time status flip latency.
+**`state.test.ts`**
+13. Mute expires after exactly 24h.
+14. State file absent → treated as no mutes, no prior notifications, no crash.
+15. State file corrupt → reset, log, continue. Never crash the daemon.
+16. Two `agentview watch` processes do not double-notify (lockfile or single-writer).
 
 ## Failure modes
 
-| # | Failure | Detection | Response |
+| # | Failure | Severity | Response |
 |---|---|---|---|
-| F1 | `~/.claude/sessions/` gone after upgrade | shape validation on read | fall back to CLI, log once, keep running |
-| F2 | `claude agents --json` output shape changes | schema check | render titles only, banner "state unavailable" |
-| F3 | `claude` not on PATH | spawn ENOENT | Source 0 only; no reconcile; banner |
-| F4 | Transcript is 33MB | size check before read | bounded tail read, never full scan |
-| F5 | AppleScript denied by TCC | non-zero exit + stderr | one-time message explaining Automation permission; copy tty to clipboard |
-| F6 | Session dies between poll and focus | `ps -p` before AppleScript | remove row, no error dialog |
-| F7 | Two sessions, same tty | detect in join | mark both unfocusable |
-| F8 | Terminal.app not running (iTerm/tmux user) | `$TERM_PROGRAM` check | disable focus, state it once at startup |
+| F1 | `~/.claude/sessions/` shape drifts after a CC upgrade | HIGH | validate on read; degrade to CLI; `doctor` names it |
+| F2 | Notification storm | **CRITICAL** | escalating ladder + `lastNotifiedAt` in state. A tool that spams gets muted, and muted returns you to 22h. This is the failure that kills the product. |
+| F3 | User mutes globally and forgets | HIGH | no global mute exists. Per-session, 24h expiry only. |
+| F4 | Daemon dies silently | HIGH | `~/.agentview/agentview.log` + our own heartbeat in `~/.agentview/state.json`. **Not** `updatedAt`: measured `updatedAt === statusUpdatedAt` in 7/7 live files (delta 0), so it is a transition timestamp too, not a liveness signal. An idle session's `updatedAt` is hours stale by design. |
+| F5 | Two daemons running | MEDIUM | lockfile at `~/.agentview/watch.lock` |
+| F6 | Clock skew / sleep | MEDIUM | durations from wall clock; a laptop asleep 8h correctly shows 8h |
+| F7 | `statusUpdatedAt` semantics differ from assumption | HIGH | M0 check below; if it is last-activity rather than state-entry, durations are wrong and the product is wrong |
 
-## NOT in scope for v0.1.0
+## M0 — verification before code (BLOCKING, and it can actually fail)
 
-- iTerm2 and tmux focus backends. Terminal.app only.
-- A `--json` output mode. No consumer exists.
-- Filtering and search. Seven rows.
-- Cost or token display. Different product.
-- Attaching to or controlling sessions. agentview observes; it never writes.
-- Windows and Linux. macOS only.
+| # | Check | Kills the project if |
+|---|---|---|
+| M0.1 | ~~Block a session, confirm `statusUpdatedAt` does not move while blocked.~~ **PASSED 2026-09-10.** `erp-00` held `statusUpdatedAt=1788941105597` unchanged across a 4.5-hour observation while `status` stayed `waiting`, as other sessions' values moved on their own transitions. It is a transition timestamp. | n/a — cleared |
+| M0.2 | Confirm `status` returns to `busy`/`idle` promptly once answered, so mutes and ladders reset. | It sticks, and every answered session keeps nagging. |
+| M0.3 | Confirm a laptop sleep/wake cycle does not reset `statusUpdatedAt`. | It resets, and the 22h case reports as minutes. |
 
-## What already exists (do not rebuild)
+M0.1 was the real gate and it **cleared** on live data before any code was written.
+M0.2 and M0.3 remain open and are each ten minutes of work.
 
-- **Session state**: `claude agents --json` and `~/.claude/sessions/*.json`.
-- **State transitions as events**: Claude Code's `Notification` and `Stop` hooks.
-  Not used in v0.1.0; the polling path is simpler and has no install step.
-- **Manual naming**: `/rename` already sets `customTitle`. agentview must respect it,
-  never override it, and should mention it in the README.
-- **Title resolution semantics**: `Gt()` in `cli.js`. Mirror it rather than invent.
+Standing evidence: `erp-00` has now been blocked **1603 minutes (26.7 hours)**. It
+gained four hours during this planning session. Nothing on the machine mentions it.
+
+## Success criteria
+
+1. **No session stays blocked more than 1 hour without you being told at least twice.**
+   Measured over one week of real use.
+2. Running `agentview` cold on a machine with a 22-hour-blocked session reports 22h,
+   not "just now." Guards the started-late case.
+3. Zero notifications for sessions that are `busy` or `idle`. False positives are
+   worse than misses here, because they cause muting.
+4. Daemon survives a Claude Code upgrade, or `doctor` explains why it did not.
+5. One week of daily use without the user muting anything out of annoyance.
 
 ## Open questions
 
-1. **M0.1 outcome.** Unknown until run in a TTY. Gates the README pitch, not the build.
-2. **Raw ANSI or Ink for M3.** Starting raw. Ink if hand-rolled rendering costs more
-   than an hour. Not a one-way door either way.
-3. **`agentName` and `summary` storage location.** `Gt()` reads them; the transcript
-   record types are not confirmed. Add to the chain once located.
-4. **Notification mechanism.** `osascript -e 'display notification'` needs no
-   permission prompt but is unstyled. `terminal-notifier` is nicer and is a dependency.
-   Deferred to M5.
+1. **M0.1 outcome.** Blocking. Ten minutes to answer.
+2. **Notification mechanism.** `osascript -e 'display notification'` needs no
+   permission and is unstyled. Evaluate at M2; do not add a dependency for polish.
+3. **Should M1.5 (title lookup) exist at all?** `erp-00` + `22h` may be sufficient.
+   Decide after a week of use, not now.
+4. **Escalation thresholds.** 5m/30m/2h/8h/daily is a guess. The right answer comes
+   from a week of use.
 
----
+## Review History
 
-# CEO REVIEW (Phase 1 — /autoplan, SELECTIVE EXPANSION)
+**v1 (killed at the CEO gate).** v1 was a session manager: TUI, title join, window
+focus. The /autoplan CEO phase plus an independent outside voice found every wedge
+occupied, verified against live sources:
 
-Mode override: autoplan forces SELECTIVE EXPANSION. Greenfield would default to
-EXPANSION. Logged in the audit trail.
+- `~/.claude/sessions/<pid>.json` as the PID join — **Recon** has shipped it for a year.
+  This was presented to the user as a novel discovery during /office-hours. It was not.
+- "The rows have real names" — **agent-deck** (863★) ships `push_title` with
+  `--title-lock`.
+- Cross-terminal window focus, proposed by the outside voice as the one unclaimed
+  wedge — **claude-code-monitor** ships it across iTerm2, Terminal.app, and Ghostty.
+  The outside voice's positive finding did not survive verification either.
+- Alert-on-block — **Claude Code Notifier** ships it.
 
-## 0A. Premise Challenge
+What survived: duration and re-surfacing. Nobody sorts by neglect; nobody tells you
+twice. That is v2.
 
-**Stated premises and their status:**
-
-| # | Premise | Verdict |
-|---|---------|---------|
-| P1 | State exists, identity does not; the product is one join | HOLDS — verified on disk |
-| P2 | `~/.claude/sessions/` is dependable | CONDITIONAL — see C2 |
-| P3 | TS on Bun beats Go here | HOLDS — go/cargo absent, `bun build --compile` verified |
-| P4 | M0 will pass | UNTESTED — that is what M0 is for |
-
-**C1 — CRITICAL: the plan may be solving a proxy problem.**
-
-The plan assumes the failure mode is *"I can't tell which session is which."* The
-measured evidence says otherwise. `erp-00` sat in `waiting` for **1367 minutes**
-(22.8 hours). No dashboard would have caught that, because catching it requires
-opening the dashboard, and nothing would have prompted that.
-
-A tool you must remember to open cannot solve "I forgot an agent was waiting on me."
-
-M5 (notifications) is the fix for the measured pain. M1-M4 is a browsing interface
-for a pain you only feel once you already suspect something is wrong. The plan
-sequences the actual solution last, behind four milestones.
-
-**Recommendation:** move notification-on-flip to M2, immediately after the join.
-The static render (current M2) and the TUI become M3-M4. You get the thing that
-would have saved 22 hours on night one, and the TUI becomes the drill-down you
-open *after* being told.
-
-Auto-decided per P1 (completeness) + P2 (blast radius, < 1 day): **reorder accepted.**
-Flagged as a TASTE DECISION for the gate, because it reverses the user's stated
-milestone order and reasonable people could want the visual first.
-
-**C2 — What if we do nothing?** Quantified and real: 1367 minutes of a blocked
-agent. This is not a hypothetical pain. Premise survives.
-
-**C3 — Is there a 10x reframing?** Yes, and it is out of scope: the same join keyed
-on `messagingSocketPath` (present in every `~/.claude/sessions/*.json`) is the door
-to *acting* on sessions, not just observing them. Deliberately deferred; "agentview
-observes, it never writes" is a good v0.1.0 boundary. Noted for TODOS.md.
-
-## 0B. Existing Code Leverage
-
-Greenfield repo, so there is no existing code. There IS existing **infrastructure**,
-and the plan maps it correctly in "What already exists". One gap:
-
-**C4 — MEDIUM: the plan dismisses hooks too fast.** It says hooks are "not used in
-v0.1.0; the polling path is simpler and has no install step." True for *state
-display*. False for *notifications*: the `Notification` hook fires with
-`notification_type: "permission_prompt"` as a push event, with no poll latency and no
-2-second budget to meet. If C1's reorder is accepted, M2's notification path should
-evaluate the hook as the primary mechanism, with polling as the no-install fallback.
-
-Auto-decided per P3 (pragmatic): **evaluate both at M2, pick one, document why.**
-
-## 0C. Dream State
-
-```
-  CURRENT STATE              THIS PLAN                    12-MONTH IDEAL
-  7 sessions, all named  --> named, stated, timed,    --> you never wonder what an
-  <cwd>-<hex>. One has       and reachable. You know      agent is doing, because it
-  been blocked 22h and       within 2s that one is        tells you, and you answer
-  nobody knows.              blocked.                     from wherever you are.
-```
-
-**Delta:** this plan closes the "I don't know" gap. It does not close the "I'm not
-at my desk" gap. That is the right boundary for v0.1.0 and the natural v0.2 (the
-socket path is already in the data).
-
-## 0C-bis. Implementation Alternatives
-
-```
-APPROACH A: TUI-first (the plan as written)
-  Summary: join -> static render -> TUI -> focus -> notify -> release
-  Effort:  M      Risk: Med
-  Pros:    Visual payoff early; easy to demo; screenshot for the README exists by M3
-           Each milestone is independently useful
-  Cons:    Ships the answer to the measured pain (notifications) LAST
-           A dashboard you must remember to open does not solve unattended blocking
-  Reuses:  claude agents --json, ~/.claude/sessions, transcript ai-title
-
-APPROACH B: Notify-first
-  Summary: join -> notify-on-flip -> static render -> TUI -> focus -> release
-  Effort:  M      Risk: Low
-  Pros:    Night one, you stop losing hours to silently blocked agents
-           Notification is ~40 lines over the join; the TUI is the expensive part
-           Forces the state machine to be correct before any pixels are spent
-  Cons:    No screenshot until later, which slows the open-source pitch
-           Less satisfying to build; no visible artifact for two milestones
-  Reuses:  Same, plus Notification hook as a candidate mechanism
-
-APPROACH C: Notify-first with a one-shot list
-  Summary: join -> `agentview` static list + notify daemon -> TUI later
-  Effort:  M      Risk: Low
-  Pros:    Both the alert AND a glanceable list on night one, ~60 lines total
-           `agentview` as a one-shot command is genuinely useful without a TUI
-           The TUI becomes an enhancement you build when you want to, not a blocker
-  Cons:    Two entry points (daemon + command) to keep coherent
-           Still no TUI screenshot for a while
-  Reuses:  Same
-```
-
-**RECOMMENDATION: Approach C.** It ships the measured fix and a usable interface in
-the same night, and it defers the expensive part (alt-screen TUI, keyboard nav) until
-after the product has proved itself in daily use. Maps to engineering preference
-"explicit over clever" and to the design doc's own assignment, which says to dogfood
-before building.
-
-Auto-decided per P1 + P5. **TASTE DECISION** — surfaced at the gate, because it
-reorders the user's stated milestones.
-
-## 0D. SELECTIVE EXPANSION — complexity check and expansion scan
-
-**Complexity check:** 11 source files, 4 test files, 6 milestones. For a solo side
-project this is calibrated, not bloated. No file count smell. Two entry points under
-Approach C is the only new moving part, and it is justified.
-
-**Minimum set that achieves the goal:** `sessions/` + notify + a one-shot print.
-Everything in `ui/watch.ts` and `focus/` is enhancement.
-
-**Expansion candidates (NOT added to scope; cherry-pick at the gate):**
-
-| # | Candidate | Effort | Note |
-|---|-----------|--------|------|
-| E1 | Answer a blocked session from the notification (uses `messagingSocketPath`) | L | The 10x version. Breaks the observe-only boundary. Defer. |
-| E2 | Menu bar badge showing count of blocked sessions | M | Ambient, no app to open. Directly serves C1. |
-| E3 | `agentview --watch-quiet` daemon mode with no UI at all | S | Falls out of Approach C almost free. |
-| E4 | Sparkline of how long each session has been blocked today | S | Delight, not value. |
-| E5 | `agentview doctor` that self-checks Source 0 shape after a CC upgrade | S | Directly mitigates F1 and the open-source portability risk. Highest value of the five. |
-
-Auto-decision: E5 **accepted** (in blast radius, < 1 day CC, mitigates a named
-failure mode). E1-E4 **deferred to TODOS.md** per P3.
-
-## 0E. Temporal Interrogation
-
-| Horizon | What happens |
-|---------|--------------|
-| HOUR 1 | M0 checks run. `claude agents` either shows real titles or does not. Either way you know what you are building. |
-| HOUR 2 | `sessions()` returns the join over fixtures. Tests 1-7 pass. |
-| HOUR 3 | Notification fires when a session flips to waiting. The 22-hour failure mode is now impossible. |
-| HOUR 4 | One-shot list prints. You use it. |
-| HOUR 6+ | You have used it for a day and know what the TUI should be, instead of guessing. |
-| MONTH 1 | A stranger installs it on a different Claude Code version. F1 either holds or the project's reputation takes the hit. E5 is the insurance. |
-| MONTH 6 | Either Anthropic surfaces titles in `claude agents` and this becomes a thin wrapper, or it does not and you own the niche. M0.1 is the early read on which. |
-
-## Error & Rescue Registry
-
-| Error | Trigger | Caught by | User sees | Tested |
-|-------|---------|-----------|-----------|--------|
-| `ENOENT ~/.claude/sessions` | CC version without the dir | `readSessions` | silent fallback to CLI, one log line | T9 |
-| Source 0 shape drift | CC upgrade changes fields | schema validation | banner: "state partially unavailable" | T10 |
-| `ENOENT claude` | not on PATH | spawn handler | banner: "reconcile disabled" | F3 (manual) |
-| Transcript >10MB | long session | size check before read | nothing; bounded tail read | T4 partial |
-| `lastPrompt` field absent | 9/4029 real records | optional chain | row shows derived name | T4 |
-| AppleScript TCC denial | first run, unsigned binary | exit code + stderr | one-time Automation permission explainer | F5 (manual) |
-| Session dies pre-focus | race | `ps -p` recheck | row disappears, no dialog | F6 |
-| Duplicate tty | two sessions, one tty | join-time detection | both marked unfocusable | T18 |
-
-**Gap:** no error is currently logged anywhere the user can retrieve after the fact.
-See C5.
-
-## Failure Modes Registry
-
-F1-F8 as written in the plan are sound. Two additions:
-
-| # | Failure | Severity | Response |
-|---|---------|----------|----------|
-| F9 | Notification fires repeatedly for the same blocked session | HIGH | Fire on transition only; hold a seen-set keyed on `sessionId + statusUpdatedAt`. Without this the tool becomes noise and gets muted, which returns you to the 22-hour failure. |
-| F10 | agentview itself crashes silently in daemon mode | MEDIUM | Write to `~/.agentview/agentview.log`; non-zero exit surfaces on next foreground run. |
-
-**C5 — MEDIUM (Prime Directive 5): the plan has no observability for itself.**
-A daemon with no log is a silent failure by construction. Auto-decided per P1:
-**accepted into scope**, one log file, append-only, no rotation for v0.1.0.
-
-## NOT in scope
-
-- E1 answer-from-notification, E2 menu bar, E3 daemon-only mode, E4 sparkline — all
-  to TODOS.md.
-- iTerm2, tmux, `--json` output, filtering, cost display, Windows/Linux — as the plan
-  already states.
-- **New:** M6 release pipeline stays in the plan but is explicitly LAST and gated on
-  the tool being used daily for a week. The design doc deferred distribution; PLAN.md
-  M6 partially re-added it. Reconciled here in favor of the doc.
-
-## What already exists
-
-| Sub-problem | Existing solution | Plan's use |
-|-------------|-------------------|------------|
-| Session state | `claude agents --json`, `~/.claude/sessions/*.json` | consumed, not rebuilt |
-| State-change events | `Notification` / `Stop` hooks | evaluated at M2 (C4) |
-| Manual naming | `/rename` -> `customTitle` | respected, never overridden |
-| Title semantics | `Gt()` in cli.js | mirrored |
-| Time in state | `statusUpdatedAt` | consumed |
-| Untitled detection | `nameSource: "derived"` | consumed |
-
-## CEO Completion Summary
-
-| Item | Status |
-|------|--------|
-| Premises challenged | 4 assessed; 1 critical finding (C1, proxy problem) |
-| Alternatives produced | 3 (A/B/C); C recommended |
-| Mode | SELECTIVE EXPANSION (autoplan override) |
-| Expansions accepted | E5 (`agentview doctor`), C5 (self-logging) |
-| Expansions deferred | E1-E4 to TODOS.md |
-| Scope reduced | M6 gated behind a week of daily use |
-| New failure modes | F9 (notification storm), F10 (silent daemon death) |
-| Taste decisions queued | Milestone reorder (C1/Approach C) |
+**Carried forward from the v1 CEO review:**
+- C1 (proxy problem): a tool you must remember to open cannot solve unattended
+  blocking. v2 is built on this finding rather than contradicting it.
+- E5 → M3 `doctor`. C5 → the log file. Both accepted into scope.
+- F9 (notification storm) → v2 F2, promoted to CRITICAL and made the core design
+  constraint rather than an edge case.
