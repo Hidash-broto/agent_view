@@ -650,3 +650,198 @@ leads nowhere.
 > Codex: unavailable. Claude subagent: 15 findings, 5 critical.
 > Consensus: 6/6 confirmed, 0 disagreements.
 > Passing to Phase 3 (Eng Review).
+
+---
+
+# ENG REVIEW (Phase 3 — /autoplan)
+
+## Section 1: Architecture
+
+```
+                       ┌──────────────────────────────┐
+                       │ ~/.claude/sessions/*.json    │  external, undocumented
+                       │ (glob *.json ONLY — *.key    │  drwx------
+                       │  files live here at 0600)    │
+                       └──────────────┬───────────────┘
+                                      │
+                    ┌─────────────────▼──────────────────┐
+        ps -eo ────►│  sources.ts                        │◄──── claude agents --json
+        (ONE call)  │  read · validate shape · liveness  │      (fallback + 30s reconcile)
+                    │  pid-reuse guard · dead-pid filter │
+                    └─────────────────┬──────────────────┘
+                                      │ RawSession[]
+                    ┌─────────────────▼──────────────────┐
+                    │  sessions.ts                       │
+                    │  → Blocked[] sorted by blockedMs   │
+                    └───────┬───────────────────┬────────┘
+                            │                   │
+              ┌─────────────▼──────┐   ┌────────▼─────────┐
+              │ duration.ts        │   │ render (cli.ts)  │
+              │ PURE. no I/O.      │   │ one-shot output  │
+              │ humanize()         │   └──────────────────┘
+              │ nextNotifyAt()     │
+              └─────────┬──────────┘
+                        │ (pure fn, state injected)
+              ┌─────────▼──────────┐
+              │ watch.ts (daemon)  │
+              └──┬──────────────┬──┘
+                 │              │
+      ┌──────────▼───┐   ┌──────▼─────────────────────┐
+      │ state.ts     │   │ notify.ts                  │
+      │ atomic write │   │ agentview.app bundle (N1)  │
+      │ tmp+rename   │   │ delivery verify (N2)       │
+      │ GC on write  │   │ coalesce (N5)              │
+      └──────────────┘   └────────────────────────────┘
+```
+
+**Layering verdict: sound.** `duration.ts` is pure with state injected, which is the
+right call and makes the ladder testable without touching disk. One coupling fix:
+`watch.ts` must own the clock. Pass `now` into every pure function rather than letting
+`duration.ts` call `Date.now()`, or half the edge cases below become untestable.
+
+## E1 — CRITICAL (verified): `procStart` and `ps lstart` are in different timezones
+
+The pid-reuse guard is necessary (see E2) and the obvious implementation is broken.
+
+```
+pid 80615  json procStart: Mon Sep  7 04:49:51 2026   <- UTC, formatted as local
+           ps -o lstart= : Mon Sep  7 10:19:51 2026   <- actually local
+                                          delta = 5:30 = the machine's TZ offset
+```
+
+Verified on two independent pids, both exactly the TZ offset. A naive string or
+`new Date()` comparison mismatches on **every** session, so every row is treated as a
+recycled pid and dropped. The tool then reports "nothing blocked" permanently while
+appearing to work correctly.
+
+**Fix:** parse `procStart` as UTC explicitly, parse `lstart` as local, compare epoch
+values with a ±2s tolerance. **Test it against a fixture from a machine in a non-UTC
+timezone** — on a UTC machine this bug is invisible, which is exactly how it ships.
+
+## E2 — CRITICAL: state must be keyed on `sessionId + blockedSince`, not `sessionId`
+
+A session that flaps `waiting → busy → waiting` gets a fresh `statusUpdatedAt`, so
+`blockedMs` resets and the ladder restarts. But `lastNotifiedMs` keyed on `sessionId`
+alone carries over from the previous block, so the new block is suppressed until the
+old ladder position is exceeded.
+
+Concretely: a session blocked 8h, answered, then blocked again fires nothing for the
+next 8 hours. **The exact failure the product exists to prevent.**
+
+**Fix:** key state on `${sessionId}:${blockedSince}`. A new block is a new key with no
+history. This also fixes pid reuse and makes GC trivial.
+
+## E3 — HIGH: multiple rungs crossed in one tick
+
+Laptop sleeps 9 hours. On wake `blockedMs` jumps past 30m, 2h, and 8h in a single
+poll. A naive loop fires three notifications at once.
+
+**Fix:** `nextNotifyAt` returns the **highest rung crossed**, never a queue. Fire once,
+record that rung. Combined with N4 (re-post highest rung on wake), the user gets one
+honest "waited 9h overnight" — which with `quiet_hours` is the product's best moment.
+
+**No listed test covers this.** Added as T17.
+
+## E4 — HIGH: clock movement makes `blockedMs` negative
+
+`blockedMs = now - statusUpdatedAt` with wall-clock values. An NTP correction backward
+yields a negative duration; `humanize(-3000)` produces nonsense and the ladder
+comparison silently never fires.
+
+**Fix:** clamp at 0, and log once when a negative appears (it indicates clock skew
+worth surfacing in `doctor`). DST does not affect epoch ms; NTP does.
+
+## E5 — MEDIUM: N process spawns per poll
+
+The plan implies `ps -p <pid>` per session. At 7 sessions that is 7 spawns per tick;
+the plan's own scaling note contemplates more.
+
+**Measured:** one `ps -eo pid=,lstart=,comm=` covering every process costs **19ms**
+total. Do that once per tick, index by pid, and get the E1 reuse guard from the same
+output for free.
+
+## E6 — MEDIUM: `state.json` grows without bound
+
+Every block of every session ever seen accrues a key, and E2's compound key makes keys
+strictly more numerous.
+
+**Fix:** GC on write. Drop entries whose sessionId is not in the current live set AND
+whose timestamp is older than 7 days. Bounded by session churn, not by uptime.
+
+## E7 — MEDIUM: concurrent state access
+
+The daemon writes on the poll loop; the one-shot CLI reads whenever the user runs it.
+
+**Fix:** write to `state.json.tmp` then `rename()`. Atomic on APFS, so a reader sees
+either the old or new file and never a torn one, and power loss mid-write leaves the
+previous good file. **A lockfile is not needed for this** and adds a stale-lock failure
+mode. The lockfile in F5 is for single-daemon enforcement only — different problem,
+keep it, but do not use it to guard state writes.
+
+## E8 — MEDIUM: Bun daemon longevity
+
+`bun build --compile` for a process meant to run for weeks. Bun 1.3.13 verified
+present. Unknowns: heap growth across tens of thousands of poll cycles, and file
+handle behavior on a directory re-globbed every 250-500ms.
+
+**Fix, cheap:** `KeepAlive` in the LaunchAgent already restarts on death. Add
+`process.memoryUsage().rss` to `agentview status` output and log it hourly. If RSS
+climbs monotonically over a week, that is data, and restarting a daemon nightly is an
+acceptable v0.1.0 answer. Do not pre-optimize; do make it observable.
+
+## Section 3: Test diagram
+
+| # | Codepath / flow | Test type | Exists? |
+|---|---|---|---|
+| 1 | glob `*.json`, never `*.key` | unit + assertion | **GAP → T19** |
+| 2 | shape validation, missing `statusUpdatedAt` | unit | T9 |
+| 3 | dead pid excluded | unit | T8 |
+| 4 | **pid reused, TZ-correct comparison** | unit + non-UTC fixture | **GAP → T20** |
+| 5 | malformed JSON in one file | unit | T11 |
+| 6 | CLI fallback when dir absent | unit | T10 |
+| 7 | sort by blockedMs desc, stable ties | unit | T12 |
+| 8 | `waiting` only (+ idle ladder) | unit | T7 |
+| 9 | humanize boundaries | unit | T1 |
+| 10 | ladder fires at each rung, once | unit | T2-4 |
+| 11 | blocked-before-daemon-start | unit | T5 |
+| 12 | **multi-rung crossed in one tick** | unit | **GAP → T17** |
+| 13 | **negative blockedMs (clock skew)** | unit | **GAP → T18** |
+| 14 | **flap waiting→busy→waiting re-notifies** | unit | **GAP → T21** |
+| 15 | mute expiry at 24h | unit | T13 |
+| 16 | state absent / corrupt | unit | T14-15 |
+| 17 | **state GC drops stale keys** | unit | **GAP → T22** |
+| 18 | **atomic write leaves no torn file** | unit | **GAP → T23** |
+| 19 | single-daemon lockfile | integration | T16 |
+| 20 | notification delivery verified | manual/doctor | N2, manual |
+| 21 | coalesce ≥2 blocked into one | unit | **GAP → T24** |
+
+**8 gaps found. All 8 accepted as additions (P1 completeness).** Test count 16 → 24.
+
+The most important is **T20**: E1 is invisible on a UTC machine, so it must be tested
+against a fixture captured in a non-UTC timezone or it ships broken to everyone except
+the author, who is in IST and would catch it — and everyone in UTC would not.
+
+## Failure modes — critical gaps
+
+| # | Gap | Severity |
+|---|---|---|
+| E1 | TZ skew silently drops every session | **CRITICAL** |
+| E2 | re-blocked session suppressed for hours | **CRITICAL** |
+| E3 | notification burst after sleep | HIGH |
+| E4 | negative duration disables the ladder | HIGH |
+
+E1 and E2 both produce **silent wrong behavior that looks like correct behavior**,
+which is the worst class for a tool whose entire job is telling you about something
+you cannot otherwise see.
+
+## NOT in scope (Eng)
+
+Unchanged from CEO/DX, plus: no retry/backoff layer for `ps` or `claude` (a failed
+tick is fine, the next one is 250ms away); no IPC between CLI and daemon (state file
+is the interface); no cross-machine sync.
+
+## What already exists
+
+`statusUpdatedAt` (duration), `nameSource` (untitled flag), `procStart` (pid-reuse
+guard), `messagingSocketPath` (deferred, v0.2 door), `claude agents --json` (fallback),
+`brew services` (daemon supervision), LaunchAgent `KeepAlive` (F4 restart).
