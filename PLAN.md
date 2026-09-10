@@ -845,3 +845,182 @@ is the interface); no cross-machine sync.
 `statusUpdatedAt` (duration), `nameSource` (untitled flag), `procStart` (pid-reuse
 guard), `messagingSocketPath` (deferred, v0.2 door), `claude agents --json` (fallback),
 `brew services` (daemon supervision), LaunchAgent `KeepAlive` (F4 restart).
+
+---
+
+# ENG DUAL VOICES — outside review + consensus
+
+Codex: `[codex-unavailable: binary not found]`. Claude subagent ran. Tag: `[subagent-only]`.
+
+```
+ENG DUAL VOICES — CONSENSUS TABLE
+═══════════════════════════════════════════════════════════════════
+  Dimension                          Primary  Subagent  Consensus
+  ──────────────────────────────────  ───────  ────────  ─────────
+  1. Architecture sound?              partial  NO        DISAGREE → resolved for subagent
+  2. Test coverage sufficient?        NO       NO        CONFIRMED (fails)
+  3. Performance risks addressed?     partial  NO        CONFIRMED (fails)
+  4. Security threats covered?        YES      partial   DISAGREE → resolved for subagent
+  5. Error paths handled?             NO       NO        CONFIRMED (fails)
+  6. Deployment risk manageable?      partial  NO        CONFIRMED (fails)
+═══════════════════════════════════════════════════════════════════
+4/6 CONFIRMED. 2 DISAGREE, both resolved in the subagent's favour on evidence.
+Engineering readiness: 4/10.
+```
+
+## The subagent beat the primary pass. Findings adopted wholesale.
+
+**A1 — CRITICAL: there is no decision module, so the product logic will live untested
+inside the daemon loop.** The four contracts (`blocked`, `humanize`, `nextNotifyAt`,
+`isMuted`) are all leaves. Nothing composes them. "Given the sessions, the state, the
+config, and now — what do I emit and what do I persist?" has no name, no file, and no
+test, so it will be written inline in `while(true)`. Every hard case lives there.
+
+**This supersedes the primary pass's architecture verdict of "layering sound."**
+
+```ts
+// tick.ts — pure. No I/O, no Date.now(), no side effects. Test this hardest.
+function tick(i: {now:number; sessions:Session[]; state:State; config:Config}):
+  {notifications:Notification[]; nextState:State; logLines:string[]}
+```
+
+Daemon becomes ~8 lines. Every edge case becomes a table-driven unit test.
+
+**A2 — `nextNotifyAt(blockedMs, lastNotifiedMs)` cannot be implemented as written.**
+`blockedMs` is a duration; test T6 proves the return is an absolute epoch. You cannot
+get an epoch from a duration without `now`, which is not a parameter. Both params are
+`number` with the same `Ms` suffix but different meanings — a swapped-argument bug the
+compiler cannot catch. Replace with `dueAt(blockedSince, rung)` and
+`highestDueRung(blockedSince, now)`, both pure and anchored to `blockedSince` so they
+are restart-invariant.
+
+**A3 — T6 contradicts T5.** "Never returns a timestamp in the past" is exactly wrong:
+the cold-start case *requires* a past due-time, which is the signal to fire now.
+Clamping to the future breaks success criterion 2. **Delete T6.**
+
+**A4 — the persisted record must carry the rung, not just the timestamp:**
+
+```ts
+interface SessionState {
+  sessionId: string; blockedSince: number;  // ← ladder key
+  lastRung: number;                          // -1 = none delivered
+  lastNotifiedAt: number | null; lastSeenAt: number;
+}
+```
+
+**Correction to primary E2:** the primary pass said a re-blocked session would be
+*suppressed*. Wrong direction. With `lastNotifiedAt` only,
+`nextNotifyAt(2min, 3h_ago)` sees "3h since we last notified" and **fires immediately
+on a two-minute-old block.** Every answered-then-reblocked session nags instantly.
+That is F2, the product-killing mode, reachable in ordinary use.
+
+**C1 — CRITICAL: `snooze` is guaranteed to be lost, at the worst moment.** Daemon does
+read-modify-write across a whole tick; the CLI snoozes *because a notification just
+fired*, i.e. inside that same tick. The daemon's write erases it, and it re-notifies
+5s later. A snooze that does not work is the exact trigger for the macOS global mute
+that N3 says is unrecoverable.
+
+**Fix — remove the shared writer rather than lock it.** Supersedes the primary pass's
+atomic-write answer, which is necessary but not sufficient:
+
+```
+~/.agentview/state.json     daemon writes, CLI reads
+~/.agentview/snoozes.json   CLI writes, daemon reads
+```
+Zero locks, zero races, both trivially testable.
+
+**C2 — CRITICAL: T15's prescribed behaviour causes the plan's own CRITICAL failure.**
+"State corrupt → reset, log, continue" discards every `lastRung` and every snooze, so
+the next tick re-fires every blocked session at its highest rung and voids every
+snooze. **A crash produces a notification storm.**
+**Fix:** keep `state.json.bak`; on parse failure try it first; if you must reset,
+**seed rather than blank** — set `lastRung = highestDueRung(...)` and
+`lastNotifiedAt = now` for every currently-blocked session. Lose one notification, not
+emit a burst. **Degrade quiet, never loud.**
+
+**C3 — F8 pid reuse, with a better fix than the primary pass found.** Orphan `.key`
+files for dead pids 550/39340/68432 prove cleanup is not universal; highest live pid
+93111 against a 99999 wrap is days away, not months. A stale `waiting` file whose pid
+gets reused escalates forever with nothing to answer.
+**Fix supersedes primary E1:** do not parse `procStart` at all. The JSON already
+carries `startedAt` as **epoch ms**. Compare it to parsed `ps lstart` with a 5s
+tolerance (1s skew measured), and require `comm` to contain `claude`. Plus a hard cap:
+stop escalating after 7 continuous days on a byte-identical file, and tell `doctor`.
+
+**C4 — `process.kill(pid,0)` instead of spawning `ps`.** Measured by the subagent:
+**100,000 calls in 43.9ms**, no subprocess. Supersedes primary E5's "one `ps` per
+tick" — spawn `ps` only for the F8 start-time cross-check.
+
+**C5 — N2 IS EMPIRICALLY WRONG. The accepted "highest-leverage fix" is a false-negative
+machine.** The subagent posted three notifications that visibly delivered as banners.
+All three read `presented = 0`.
+
+Independently re-verified here on the aggregate: **64 rows `presented=0`, 8 rows
+`presented=1`.** If that column meant "delivered," 64 notifications silently failed.
+It tracks *currently presented* — a banner that auto-dismisses after ~5s reads 0.
+
+**`agentview doctor` as accepted would exit non-zero on a perfectly healthy machine,
+which is worse than having no check: it teaches the user to ignore doctor.**
+
+**Corrected fix:** check **record existence** — matching uuid or decoded title with
+`delivered_date` inside the last N seconds — never `presented`. Note also that the
+`data` column is a **binary plist**, so correlation needs bplist decoding, and reading
+the DB at all requires **Full Disk Access**, which a launchd-launched binary will not
+have. Detect the FDA case explicitly and print the grant instruction rather than
+reporting a delivery failure.
+
+**C6 — N1's cost was badly underestimated.** "~40KB Info.plist + helper" is wrong. Time
+Sensitive (N4) + an action button (Snooze) + a click handler (N6) require
+`UNUserNotificationCenter` from a running bundle, which means a **compiled ObjC/Swift
+helper linking UserNotifications.framework, plus codesign, plus notarization.** The
+"TypeScript on Bun, one toolchain" story becomes "Bun + Swift + codesign + notarize."
+That is not reflected in T1's language trade-off, the milestones, or the file layout.
+
+**C7 — Bun measured, not assumed.** Binary **63,072,928 bytes**. RSS over 30,000 ticks:
+21.5 → **39.3 MB** without a subprocess; 23.1 → **81.2 MB** with `Bun.spawn(ps)` per
+tick. Both plateau — **no unbounded leak**. But spawning doubles resident memory for a
+daemon whose job is stat-ing seven small files, which C4 removes. Mandate: every spawn
+`await p.exited` or use `spawnSync`, or the fd and zombie leak silently under a
+1,048,576 fd limit. Add a 24h soak asserting RSS at t=24h within 20% of t=1h.
+
+**C8 — scope was never re-costed.** ~20 features accepted across three phases
+(D1-D6, N1-N6, Q1-Q5) and the File layout, Function contracts, and Test plan sections
+were never regenerated. The plan still boasts "seven source files" while carrying more
+accepted scope than v1 had. Missing modules with no home: `log.ts`, `launchd.ts`,
+`config.ts`, `focus.ts`, `ladder.ts`, the `.app` build target, and a persisted history
+for "longest wait today" (which is an event log with daily rollup, not "one counter").
+**Realistic estimate: 5-8 days, not one night**, driven almost entirely by N1.
+
+**C9 — L10, timers vs polling.** If the daemon uses `setTimeout(dueAt - now)`, the
+timer is monotonic and an 8h sleep delivers 16h late. **Mandate: poll on a fixed short
+interval and recompute from wall clock every tick. Never `setTimeout` beyond one tick.**
+
+**C10 — L8, DST breaks `quiet_hours`, and the author cannot reproduce it.**
+Asia/Kolkata has no DST. Every US/EU user hits it twice a year. Same class as the TZ
+bug above: invisible locally, broken for everyone else. Needs
+`TZ=America/New_York` fixtures at the 2026-03-08 and 2026-11-01 transitions.
+
+**C11 — F13, `waitingFor` value space assumed.** Only `"input needed"` observed. If a
+short-lived tool-approval state also sets `waiting` under a different `waitingFor`, the
+ladder starts on prompts that resolve in 8 seconds. False positives are the worst kind
+here. `doctor` should record every distinct value seen; escalate only on an allowlist.
+
+**C12 — the `.key` test the plan mandates in prose is not in the numbered list.** The
+plan's most safety-critical assertion exists only as narrative. Add it as a numbered
+test.
+
+## Revised test count
+
+Primary pass: 16 → 24. Subagent found 14 more uncovered paths, including the entire
+`tick()` layer, quiet-hours DST, the snooze race, corrupt-state seeding, and the
+mandated `.key` assertion. **Final: 24 → 33**, and two existing tests (T2, T3) test the
+5m rung that Q2 deleted.
+
+## Phase 3 complete
+
+> Codex: unavailable. Claude subagent: 30+ findings, 6 critical.
+> Consensus: 4/6 confirmed, 2 disagreements both resolved for the subagent on evidence.
+> Engineering readiness 4/10. Single most likely production bug: state keyed on
+> `sessionId` alone with only `lastNotifiedAt` persisted — it produces four separate
+> silent wrong-notification bugs and none of the 16 original tests catch any of them.
+> Passing to Phase 4 (Final Gate).
