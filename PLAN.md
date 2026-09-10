@@ -251,3 +251,218 @@ delivery, real-time status flip latency.
 4. **Notification mechanism.** `osascript -e 'display notification'` needs no
    permission prompt but is unstyled. `terminal-notifier` is nicer and is a dependency.
    Deferred to M5.
+
+---
+
+# CEO REVIEW (Phase 1 — /autoplan, SELECTIVE EXPANSION)
+
+Mode override: autoplan forces SELECTIVE EXPANSION. Greenfield would default to
+EXPANSION. Logged in the audit trail.
+
+## 0A. Premise Challenge
+
+**Stated premises and their status:**
+
+| # | Premise | Verdict |
+|---|---------|---------|
+| P1 | State exists, identity does not; the product is one join | HOLDS — verified on disk |
+| P2 | `~/.claude/sessions/` is dependable | CONDITIONAL — see C2 |
+| P3 | TS on Bun beats Go here | HOLDS — go/cargo absent, `bun build --compile` verified |
+| P4 | M0 will pass | UNTESTED — that is what M0 is for |
+
+**C1 — CRITICAL: the plan may be solving a proxy problem.**
+
+The plan assumes the failure mode is *"I can't tell which session is which."* The
+measured evidence says otherwise. `erp-00` sat in `waiting` for **1367 minutes**
+(22.8 hours). No dashboard would have caught that, because catching it requires
+opening the dashboard, and nothing would have prompted that.
+
+A tool you must remember to open cannot solve "I forgot an agent was waiting on me."
+
+M5 (notifications) is the fix for the measured pain. M1-M4 is a browsing interface
+for a pain you only feel once you already suspect something is wrong. The plan
+sequences the actual solution last, behind four milestones.
+
+**Recommendation:** move notification-on-flip to M2, immediately after the join.
+The static render (current M2) and the TUI become M3-M4. You get the thing that
+would have saved 22 hours on night one, and the TUI becomes the drill-down you
+open *after* being told.
+
+Auto-decided per P1 (completeness) + P2 (blast radius, < 1 day): **reorder accepted.**
+Flagged as a TASTE DECISION for the gate, because it reverses the user's stated
+milestone order and reasonable people could want the visual first.
+
+**C2 — What if we do nothing?** Quantified and real: 1367 minutes of a blocked
+agent. This is not a hypothetical pain. Premise survives.
+
+**C3 — Is there a 10x reframing?** Yes, and it is out of scope: the same join keyed
+on `messagingSocketPath` (present in every `~/.claude/sessions/*.json`) is the door
+to *acting* on sessions, not just observing them. Deliberately deferred; "agentview
+observes, it never writes" is a good v0.1.0 boundary. Noted for TODOS.md.
+
+## 0B. Existing Code Leverage
+
+Greenfield repo, so there is no existing code. There IS existing **infrastructure**,
+and the plan maps it correctly in "What already exists". One gap:
+
+**C4 — MEDIUM: the plan dismisses hooks too fast.** It says hooks are "not used in
+v0.1.0; the polling path is simpler and has no install step." True for *state
+display*. False for *notifications*: the `Notification` hook fires with
+`notification_type: "permission_prompt"` as a push event, with no poll latency and no
+2-second budget to meet. If C1's reorder is accepted, M2's notification path should
+evaluate the hook as the primary mechanism, with polling as the no-install fallback.
+
+Auto-decided per P3 (pragmatic): **evaluate both at M2, pick one, document why.**
+
+## 0C. Dream State
+
+```
+  CURRENT STATE              THIS PLAN                    12-MONTH IDEAL
+  7 sessions, all named  --> named, stated, timed,    --> you never wonder what an
+  <cwd>-<hex>. One has       and reachable. You know      agent is doing, because it
+  been blocked 22h and       within 2s that one is        tells you, and you answer
+  nobody knows.              blocked.                     from wherever you are.
+```
+
+**Delta:** this plan closes the "I don't know" gap. It does not close the "I'm not
+at my desk" gap. That is the right boundary for v0.1.0 and the natural v0.2 (the
+socket path is already in the data).
+
+## 0C-bis. Implementation Alternatives
+
+```
+APPROACH A: TUI-first (the plan as written)
+  Summary: join -> static render -> TUI -> focus -> notify -> release
+  Effort:  M      Risk: Med
+  Pros:    Visual payoff early; easy to demo; screenshot for the README exists by M3
+           Each milestone is independently useful
+  Cons:    Ships the answer to the measured pain (notifications) LAST
+           A dashboard you must remember to open does not solve unattended blocking
+  Reuses:  claude agents --json, ~/.claude/sessions, transcript ai-title
+
+APPROACH B: Notify-first
+  Summary: join -> notify-on-flip -> static render -> TUI -> focus -> release
+  Effort:  M      Risk: Low
+  Pros:    Night one, you stop losing hours to silently blocked agents
+           Notification is ~40 lines over the join; the TUI is the expensive part
+           Forces the state machine to be correct before any pixels are spent
+  Cons:    No screenshot until later, which slows the open-source pitch
+           Less satisfying to build; no visible artifact for two milestones
+  Reuses:  Same, plus Notification hook as a candidate mechanism
+
+APPROACH C: Notify-first with a one-shot list
+  Summary: join -> `agentview` static list + notify daemon -> TUI later
+  Effort:  M      Risk: Low
+  Pros:    Both the alert AND a glanceable list on night one, ~60 lines total
+           `agentview` as a one-shot command is genuinely useful without a TUI
+           The TUI becomes an enhancement you build when you want to, not a blocker
+  Cons:    Two entry points (daemon + command) to keep coherent
+           Still no TUI screenshot for a while
+  Reuses:  Same
+```
+
+**RECOMMENDATION: Approach C.** It ships the measured fix and a usable interface in
+the same night, and it defers the expensive part (alt-screen TUI, keyboard nav) until
+after the product has proved itself in daily use. Maps to engineering preference
+"explicit over clever" and to the design doc's own assignment, which says to dogfood
+before building.
+
+Auto-decided per P1 + P5. **TASTE DECISION** — surfaced at the gate, because it
+reorders the user's stated milestones.
+
+## 0D. SELECTIVE EXPANSION — complexity check and expansion scan
+
+**Complexity check:** 11 source files, 4 test files, 6 milestones. For a solo side
+project this is calibrated, not bloated. No file count smell. Two entry points under
+Approach C is the only new moving part, and it is justified.
+
+**Minimum set that achieves the goal:** `sessions/` + notify + a one-shot print.
+Everything in `ui/watch.ts` and `focus/` is enhancement.
+
+**Expansion candidates (NOT added to scope; cherry-pick at the gate):**
+
+| # | Candidate | Effort | Note |
+|---|-----------|--------|------|
+| E1 | Answer a blocked session from the notification (uses `messagingSocketPath`) | L | The 10x version. Breaks the observe-only boundary. Defer. |
+| E2 | Menu bar badge showing count of blocked sessions | M | Ambient, no app to open. Directly serves C1. |
+| E3 | `agentview --watch-quiet` daemon mode with no UI at all | S | Falls out of Approach C almost free. |
+| E4 | Sparkline of how long each session has been blocked today | S | Delight, not value. |
+| E5 | `agentview doctor` that self-checks Source 0 shape after a CC upgrade | S | Directly mitigates F1 and the open-source portability risk. Highest value of the five. |
+
+Auto-decision: E5 **accepted** (in blast radius, < 1 day CC, mitigates a named
+failure mode). E1-E4 **deferred to TODOS.md** per P3.
+
+## 0E. Temporal Interrogation
+
+| Horizon | What happens |
+|---------|--------------|
+| HOUR 1 | M0 checks run. `claude agents` either shows real titles or does not. Either way you know what you are building. |
+| HOUR 2 | `sessions()` returns the join over fixtures. Tests 1-7 pass. |
+| HOUR 3 | Notification fires when a session flips to waiting. The 22-hour failure mode is now impossible. |
+| HOUR 4 | One-shot list prints. You use it. |
+| HOUR 6+ | You have used it for a day and know what the TUI should be, instead of guessing. |
+| MONTH 1 | A stranger installs it on a different Claude Code version. F1 either holds or the project's reputation takes the hit. E5 is the insurance. |
+| MONTH 6 | Either Anthropic surfaces titles in `claude agents` and this becomes a thin wrapper, or it does not and you own the niche. M0.1 is the early read on which. |
+
+## Error & Rescue Registry
+
+| Error | Trigger | Caught by | User sees | Tested |
+|-------|---------|-----------|-----------|--------|
+| `ENOENT ~/.claude/sessions` | CC version without the dir | `readSessions` | silent fallback to CLI, one log line | T9 |
+| Source 0 shape drift | CC upgrade changes fields | schema validation | banner: "state partially unavailable" | T10 |
+| `ENOENT claude` | not on PATH | spawn handler | banner: "reconcile disabled" | F3 (manual) |
+| Transcript >10MB | long session | size check before read | nothing; bounded tail read | T4 partial |
+| `lastPrompt` field absent | 9/4029 real records | optional chain | row shows derived name | T4 |
+| AppleScript TCC denial | first run, unsigned binary | exit code + stderr | one-time Automation permission explainer | F5 (manual) |
+| Session dies pre-focus | race | `ps -p` recheck | row disappears, no dialog | F6 |
+| Duplicate tty | two sessions, one tty | join-time detection | both marked unfocusable | T18 |
+
+**Gap:** no error is currently logged anywhere the user can retrieve after the fact.
+See C5.
+
+## Failure Modes Registry
+
+F1-F8 as written in the plan are sound. Two additions:
+
+| # | Failure | Severity | Response |
+|---|---------|----------|----------|
+| F9 | Notification fires repeatedly for the same blocked session | HIGH | Fire on transition only; hold a seen-set keyed on `sessionId + statusUpdatedAt`. Without this the tool becomes noise and gets muted, which returns you to the 22-hour failure. |
+| F10 | agentview itself crashes silently in daemon mode | MEDIUM | Write to `~/.agentview/agentview.log`; non-zero exit surfaces on next foreground run. |
+
+**C5 — MEDIUM (Prime Directive 5): the plan has no observability for itself.**
+A daemon with no log is a silent failure by construction. Auto-decided per P1:
+**accepted into scope**, one log file, append-only, no rotation for v0.1.0.
+
+## NOT in scope
+
+- E1 answer-from-notification, E2 menu bar, E3 daemon-only mode, E4 sparkline — all
+  to TODOS.md.
+- iTerm2, tmux, `--json` output, filtering, cost display, Windows/Linux — as the plan
+  already states.
+- **New:** M6 release pipeline stays in the plan but is explicitly LAST and gated on
+  the tool being used daily for a week. The design doc deferred distribution; PLAN.md
+  M6 partially re-added it. Reconciled here in favor of the doc.
+
+## What already exists
+
+| Sub-problem | Existing solution | Plan's use |
+|-------------|-------------------|------------|
+| Session state | `claude agents --json`, `~/.claude/sessions/*.json` | consumed, not rebuilt |
+| State-change events | `Notification` / `Stop` hooks | evaluated at M2 (C4) |
+| Manual naming | `/rename` -> `customTitle` | respected, never overridden |
+| Title semantics | `Gt()` in cli.js | mirrored |
+| Time in state | `statusUpdatedAt` | consumed |
+| Untitled detection | `nameSource: "derived"` | consumed |
+
+## CEO Completion Summary
+
+| Item | Status |
+|------|--------|
+| Premises challenged | 4 assessed; 1 critical finding (C1, proxy problem) |
+| Alternatives produced | 3 (A/B/C); C recommended |
+| Mode | SELECTIVE EXPANSION (autoplan override) |
+| Expansions accepted | E5 (`agentview doctor`), C5 (self-logging) |
+| Expansions deferred | E1-E4 to TODOS.md |
+| Scope reduced | M6 gated behind a week of daily use |
+| New failure modes | F9 (notification storm), F10 (silent daemon death) |
+| Taste decisions queued | Milestone reorder (C1/Approach C) |
