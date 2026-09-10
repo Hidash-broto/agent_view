@@ -449,3 +449,39 @@ developer has already decided is broken thirty seconds after installing it.
 - [ ] D5 optional `~/.agentview/config.json`, read-if-exists (M2) — TASTE
 - [ ] D6 README trust section (M4)
 - [ ] Notification copy table, including the 2h switch to absolute time (M2)
+
+---
+
+<!-- AUTONOMOUS DECISION LOG -->
+# Decision Audit Trail
+
+| # | Phase | Decision | Class | Principle | Rationale | Rejected |
+|---|-------|----------|-------|-----------|-----------|----------|
+| 1 | 0 | Language: TypeScript on Bun, not Go | Taste | P3 pragmatic | go/cargo absent; bun present; `bun build --compile` verified to give the same single-binary story | Go + Bubble Tea (doc's pick) |
+| 2 | 0 | Mode: SELECTIVE EXPANSION | Mechanical | autoplan override | greenfield would default to EXPANSION; override logged | EXPANSION |
+| 3 | 1 | C1: plan solves a proxy problem | Taste | P1 completeness | 1367min blocked proves a dashboard you must open cannot catch it | keep TUI-first order |
+| 4 | 1 | Approach C over A | Taste | P1+P5 | ships the measured fix and a usable interface the same night | A (TUI-first), B (notify-only) |
+| 5 | 1 | E5 `doctor` into scope | Mechanical | P2 blast radius | <1d CC, mitigates the named portability failure | defer |
+| 6 | 1 | C5 self-logging into scope | Mechanical | P1 | a daemon with no log is a silent failure by construction | defer |
+| 7 | 1 | E1-E4 deferred to TODOS.md | Mechanical | P3 | outside blast radius | include |
+| 8 | 1 | F9 notification storm → CRITICAL | Mechanical | P1 | muting returns the user to the 22h failure; it is the product-killing mode | keep as HIGH |
+| 9 | 1* | **v1 killed; narrow to neglect detection** | **User Challenge** | n/a | every wedge verified occupied against live sources; user chose the narrowing | build v1 as written |
+| 10 | 2 | Design phase skipped | Mechanical | evidence | 1 UI-scope match ("File layout"), below 2+ threshold | run design review |
+| 11 | 2.5 | D1 empty-state proof-of-life | Mechanical | P1+P5 | monitoring tool whose value moment needs a live failure has no hello world | ship as-is |
+| 12 | 2.5 | D2 daemon lifecycle verbs + launchd | Mechanical | P1 | v2 reintroduced v1's own bug one layer down | leave to the user |
+| 13 | 2.5 | D3 mute by name prefix | Mechanical | P5 explicit | a UUID is unavailable at the moment of annoyance | mute by id |
+| 14 | 2.5 | D4 three error strings verbatim | Mechanical | P1 | principle: problem + cause + fix | leave unspecified |
+| 15 | 2.5 | D5 optional config file | Taste | P4 vs P5 | escape hatch (5 lines) vs shipping the guess and learning from a week of use | hardcode only |
+| 16 | 2.5 | D6 README trust section | Mechanical | P1 | reads another tool's internals + runs a daemon; must be stated | omit |
+
+\* Decision 9 was raised mid-run rather than at the gate because it invalidated the
+premise of the three remaining phases. Reviewing craftsmanship on a plan whose wedge
+is occupied is process theater. The user chose the narrowing explicitly.
+
+## Taste decisions queued for the Final Gate
+
+| # | Decision | Recommended | Alternative | Downstream if you pick the alternative |
+|---|----------|-------------|-------------|---------------------------------------|
+| T1 | Language | TypeScript on Bun | Go + Bubble Tea | You install Go tonight. Better long-term TUI ecosystem, but v2 has no TUI, so the advantage is mostly gone. |
+| T2 | Milestone order | notify-first (Approach C) | TUI/list-first | You get a screenshot sooner for the README, and the 22h fix later. |
+| T3 | Config escape hatch (D5) | ship optional config.json | hardcode the guess | Hardcoding forces you to feel the wrong thresholds, which is how you learn the right ones. Genuinely defensible. |
