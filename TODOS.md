@@ -46,3 +46,38 @@ v0.1.0; everything here was considered and consciously deferred.
   reports as minutes and the product's headline number is wrong. Ten minutes.
 - **Escalation thresholds** (30m/2h/8h/daily) are a guess. The right values come from
   a week of real use, which is why `config.toml` ships at v0.1.0.
+
+## Deferred at the /autoplan final gate (2026-09-14)
+
+Cut from v0.1.0 to keep the first version to one night. Every item here was *accepted*
+by a review phase, then deferred on cost once the total was honestly re-costed at 5-8
+days. None of them are rejected; they are sequenced behind knowing whether the tool
+gets used.
+
+- **N1 / N4 / N6 — the signed `agentview.app` bundle.** Owning the bundle id (so the
+  notification stops saying "Script Editor"), requesting Time Sensitive so it survives
+  Focus, a Snooze action button, and click-to-focus-the-tty. Originally costed at
+  "~40KB Info.plist + helper"; actually needs a compiled ObjC/Swift helper linking
+  UserNotifications.framework, plus codesign and notarization. **This one item is most
+  of the 5-8 day estimate.** Do it when you know you want the tool.
+- **N2 — `doctor` delivery round-trip.** And note the originally-accepted version was
+  wrong: the `presented` column is not a delivery flag (verified: 64 rows at 0, 8 at
+  1). Check record existence with a recent `delivered_date` instead. Also needs Full
+  Disk Access, which a launchd-started binary will not have — detect and explain that
+  case rather than reporting a delivery failure.
+- **N5 — coalescing.** One notification per tick when 2+ sessions cross a rung
+  together. Matters at 7+ sessions; you have 7. Promote early if M4 shows bursts.
+- **D2 — launchd lifecycle** (`start` / `stop` / `status` / `uninstall` + plist) and
+  **Q3 brew services**. Until this exists, `agentview watch` dies when you close the
+  terminal — which is the same class of bug as v1's "dashboard you must remember to
+  open." Accept it only because you are dogfooding in the foreground.
+- **D5 / Q1 — `config.toml` and `quiet_hours`.** quiet_hours is the best single idea
+  in the DX review (let the ladder count overnight, deliver one honest "waited 9h
+  overnight" at 07:30 instead of a 3am banner into Focus). It needs local-zone date
+  math with DST handling, and **Asia/Kolkata has no DST so you cannot reproduce the
+  bugs locally** — needs `TZ=America/New_York` fixtures at 2026-03-08 and 2026-11-01.
+- **The idle ladder.** `acme-api-47` idle 190m and `erp-0e` idle 187m
+  are arguably neglect too. One enum value, but it changes what the product claims.
+- **M1.5 — transcript title join.** `cwd` basename plus name is enough for now.
+- **`agentview --json`** for statusline/tmux piping.
+- **Brew tap and release automation.** Gated on the week of use, per the CEO phase.

@@ -2,7 +2,10 @@
 
 Design doc: `~/.gstack/projects/terminal-with-tab-name/hidash-unknown-design-20260910-071553.md`
 Branch: main
-Status: DRAFT v2 — v1 killed at the /autoplan CEO gate, see Review History
+Status: **APPROVED 2026-09-14** — v0.1.0 scope cut at the /autoplan final gate.
+v1 killed at the CEO gate (see Review History). Sections below the Failure Modes
+table are review artifacts and are historical; File layout / Function contracts /
+Test plan above are the authoritative v0.1.0 spec.
 Stack: TypeScript on Bun, `bun build --compile`
 
 ## The one sentence
@@ -64,12 +67,15 @@ Two rules that make it work rather than become noise:
 
 ## Milestones
 
-### M1 — `agentview` (one shot)
+### M1 — the correctness core (one night)
 
-Prints blocked sessions sorted by duration, longest first. Exits.
+`tick.ts`, `ladder.ts`, `state.ts`, `snoozes.ts`, `sessions.ts` plus the 14
+silent-failure tests. No output yet. This is the product; everything else is a view.
 
-The honest output on this machine right now is ONE row, not three. The earlier mock
-in this plan showed a state the machine has never been in. Real:
+### M2 — `agentview` (one shot)
+
+Honest output on this machine is ONE row, not three. The v2 mock showed a state the
+machine has never been in:
 
 ```
 $ agentview
@@ -89,32 +95,21 @@ $ agentview
   Longest idle: acme-api, 3h (finished, no prompt since)
 
   agentview watch    notify me when one blocks
-  agentview doctor   check notifications actually work
 ```
 
-**Idle is neglect too.** Measured: `acme-api-47` idle 190m and
-`erp-0e` idle 187m. Both finished and are sitting there. A `waiting`-only filter shows
-1 row where the user perceives 4 neglected sessions. Add a second, quieter ladder for
-`idle > 4h`. Costs one enum value.
+### M3 — `agentview watch` + `snooze` + `doctor`
 
-No TUI, no attach. That is the whole M1.
+Foreground daemon, fixed-interval poll, `osascript` notification. **The notification
+will say "Script Editor"** — misattributed, ugly, and accepted for v0.1.0 because
+owning the bundle id costs Swift plus codesign plus notarization (see TODOS).
+`agentview snooze erp 4h` by name prefix. `doctor` checks shape only, no delivery
+round-trip.
 
-### M2 — `agentview watch` (the daemon)
+### M4 — one week of daily use
 
-Escalation ladder above. macOS notification via `osascript`. Writes
-`~/.agentview/agentview.log`. Survives `claude` restarts and Claude Code upgrades.
-
-### M3 — `agentview doctor`
-
-Self-check: does `~/.claude/sessions/` exist, does its shape still carry
-`status` and `statusUpdatedAt`, does `claude agents --json` agree on the pid set.
-Prints a diagnosis, exits non-zero on drift. This is the insurance policy for
-building on an undocumented internal path.
-
-### M4 — Release
-
-`bun build --compile`, Actions on tag, Homebrew tap. **Gated on one week of daily
-personal use.** Not before.
+Not a build step. The thresholds, whether idle belongs in the ladder, and whether the
+misattributed notification is actually intolerable are all answered here and nowhere
+else.
 
 ## Data layer
 
@@ -156,77 +151,138 @@ back to `claude agents --json`, which carries `status` but **not** `statusUpdate
 Degraded mode shows "blocked (duration unknown, since agentview started)" and says so.
 Never fabricate a duration.
 
-## File layout
+## File layout (v0.1.0 core — regenerated at the final gate)
 
 ```
 src/
-  cli.ts              arg parsing: (none) | watch | doctor | mute <id>
-  sessions.ts         read Source 0, validate shape, filter dead pids, fallback
-  duration.ts         humanize, escalation ladder, next-notify-at
-  state.ts            ~/.agentview/state.json — last-notified, mutes
-  notify.ts           osascript wrapper
-  doctor.ts           shape + agreement checks
+  cli.ts         arg parse: (none) | watch | snooze <name> [dur] | doctor
+  sessions.ts    read *.json, validate, liveness, pid-reuse guard, CLI fallback
+  ladder.ts      PURE. dueAt, highestDueRung. No I/O, no Date.now().
+  format.ts      PURE. humanize, absoluteTime, renderRow, renderEmpty
+  tick.ts        PURE. the decision seam. Test this hardest.
+  state.ts       state.json — daemon writes only. tmp+fsync+rename, .bak, seed-not-blank
+  snoozes.ts     snoozes.json — CLI writes only, daemon reads. No shared writer, no lock.
+  notify.ts      osascript wrapper
+  watch.ts       the loop. ~8 lines.
+  doctor.ts      shape check only (no delivery round-trip — deferred, see TODOS)
 test/
-  sessions.test.ts
-  duration.test.ts
-  state.test.ts
-  fixtures/
+  tick.test.ts       ladder.test.ts     sessions.test.ts
+  state.test.ts      format.test.ts     fixtures/
 ```
 
-Seven source files. v1 had eleven for a bigger idea.
+Ten source files. The v2 plan claimed seven while carrying more scope than v1; this is
+the honest count for what actually ships.
 
-## Function contracts
+## Function contracts (v0.1.0 core)
 
 ```ts
-interface Blocked {
-  sessionId: string;
-  pid: number;
-  name: string;
-  cwd: string;
-  waitingFor: string;
-  blockedSince: number;      // ms epoch, from statusUpdatedAt
-  blockedMs: number;         // now - blockedSince
-  durationKnown: boolean;    // false in CLI-fallback mode
+type Status = 'waiting' | 'busy' | 'idle';
+
+interface Session {
+  sessionId: string; pid: number; name: string; cwd: string;
+  status: Status; waitingFor?: string;
+  blockedSince: number;        // statusUpdatedAt, meaningful when status==='waiting'
+  startedAt: number;           // epoch ms — the pid-reuse guard. NOT procStart.
+  durationKnown: boolean;      // false in CLI-fallback mode
 }
 
-// Blocked sessions only, sorted by blockedMs desc. Dead pids excluded.
-async function blocked(): Promise<Blocked[]>
-
-// 1367*60000 -> "22h"; 369*60000 -> "6h"; 4*60000 -> "4m"; 30000 -> "now"
-function humanize(ms: number): string
-
-// The ladder. Returns the next notify timestamp given how long it has been
-// blocked and when we last notified. null = do not notify yet.
-function nextNotifyAt(blockedMs: number, lastNotifiedMs: number | null): number | null
-
-// Per-session, 24h expiry. No global mute by design.
-function isMuted(sessionId: string, now: number): boolean
+interface SessionState {
+  sessionId: string;
+  blockedSince: number;        // the ladder key. A change here IS a new block.
+  lastRung: number;            // -1 = none delivered
+  lastNotifiedAt: number | null;
+  lastSeenAt: number;          // for GC
+}
+type State = Record<string, SessionState>;   // key: `${sessionId}:${blockedSince}`
 ```
 
-## Test plan
+**`ladder.ts` — pure, absolute, restart-invariant.** Anchored to `blockedSince`, so a
+daemon restart cannot shift or reset the schedule.
 
-**`duration.test.ts`** — the product logic, tested hardest.
-1. `humanize` boundaries: 0, 59s, 60s, 59m, 60m, 1h59m, 2h, 23h59m, 24h, 1367m.
-2. Ladder fires at 5m and not at 4m59s.
-3. Ladder does not re-fire at 6m when last notified at 5m.
-4. Ladder fires at 30m, 2h, 8h, then every 24h and not more often.
-5. A session blocked 22h with no prior notification fires immediately, once, then
-   follows the daily cadence. Guards the "agentview started after the block" case.
-6. Ladder never returns a timestamp in the past.
+```ts
+const LADDER = [30*MIN, 2*HOUR, 8*HOUR];     // Q2 removed the 5m rung
+const DAILY  = 24*HOUR;
 
-**`sessions.test.ts`**
-7. Only `status: "waiting"` rows are returned; `busy` and `idle` excluded.
-8. Dead pid excluded even though its file exists.
-9. `statusUpdatedAt` missing → `durationKnown: false`, no crash, no fabricated time.
-10. `~/.claude/sessions/` absent → CLI fallback, `durationKnown: false`, logged once.
-11. Malformed JSON in one file does not prevent the other files from being read.
-12. Sort is strictly by `blockedMs` desc, ties broken by `sessionId` for stability.
+function dueAt(blockedSince: number, rung: number): number;
+function highestDueRung(blockedSince: number, now: number): number;  // -1 if none due
+```
 
-**`state.test.ts`**
-13. Mute expires after exactly 24h.
-14. State file absent → treated as no mutes, no prior notifications, no crash.
-15. State file corrupt → reset, log, continue. Never crash the daemon.
-16. Two `agentview watch` processes do not double-notify (lockfile or single-writer).
+**`tick.ts` — the seam the review found missing.** Everything hard happens here, and
+it is pure, so everything hard is table-testable with no clock and no filesystem.
+
+```ts
+function tick(i: {
+  now: number; sessions: Session[]; state: State; snoozes: Snooze[];
+}): { notifications: Notification[]; nextState: State; logLines: string[] };
+```
+
+Fire iff `highestDueRung(blockedSince, now) > state.lastRung`, and fire **only that
+rung**. `lastRung` advances only on delivery.
+
+**`sessions.ts`** — glob `*.json` only, never `*`. Liveness via
+`process.kill(pid, 0)` (no subprocess). Pid-reuse guard compares `startedAt` (epoch)
+against parsed `ps lstart` with a 5s tolerance — never `procStart`, which is UTC
+formatted as local. One `ps` call per tick, not per session.
+
+**`watch.ts`** — poll on a fixed interval, recompute from wall clock every tick.
+**Never `setTimeout` beyond one tick**: a monotonic timer sleeps through system sleep
+and delivers hours late.
+
+## Test plan (v0.1.0 core — 22 tests)
+
+Ordered by how quietly they fail. Everything above the line fails silently and looks
+like correct behaviour; write those first.
+
+**`tick.test.ts` — silent-failure territory**
+| # | Test | Guards |
+|---|------|--------|
+| 1 | flap: answered then re-blocked 2m ago emits NOTHING | L1, the top production-bug risk |
+| 2 | 9h sleep crossing 30m+2h+8h emits ONE notification at rung 2 | L3 |
+| 3 | cold start on a 26h block fires the daily rung, not 30m | L4, the headline demo |
+| 4 | clock steps backwards: no notification, no negative, logs "clock" | L6 |
+| 5 | snoozed session emits nothing; expired snooze emits | C1 |
+| 6 | `status !== waiting` never emits | criterion 3 |
+
+**`state.test.ts` — silent-failure territory**
+| # | Test | Guards |
+|---|------|--------|
+| 7 | corrupt state SEEDS lastRung from current blocks, does not blank | C2, the storm |
+| 8 | `.bak` is tried before any reset | C2 |
+| 9 | CLI snooze written during a daemon tick survives | C1 |
+| 10 | write is tmp+fsync+rename; a reader never sees a torn file | C2 |
+| 11 | GC drops keys absent from the live set and older than 7d | F11 |
+
+**`sessions.test.ts` — silent-failure territory**
+| # | Test | Guards |
+|---|------|--------|
+| 12 | **never opens a path ending `.key`** (assert on the fs call) | trust; mandated in prose by v2 and omitted from its list |
+| 13 | reused pid excluded via `startedAt` mismatch, TZ-independent | F8 |
+| 14 | torn read is retried once, NOT reported as schema drift | C6 |
+
+_Above this line: 14 tests for failures that look like success._
+
+**Loud failures**
+| # | Test | Guards |
+|---|------|--------|
+| 15 | dead pid excluded | liveness |
+| 16 | missing `statusUpdatedAt` → durationKnown false, no fabricated time | F1 |
+| 17 | dir absent → CLI fallback, logged ONCE not per tick | F1 |
+| 18 | one malformed file does not block the others | resilience |
+| 19 | sort by blockedMs desc, ties by sessionId | stability |
+
+**`ladder.test.ts`**
+| # | Test | Guards |
+|---|------|--------|
+| 20 | `dueAt` is independent of `now` — same input, same output | restart-invariance |
+| 21 | rung boundaries: 29m59s→-1, 30m→0, 2h→1, 8h→2, 32h→3, 30d correct | closed form |
+
+**`format.test.ts`**
+| # | Test | Guards |
+|---|------|--------|
+| 22 | humanize: 0, 59s, 60s, 59m, 60m, 2h, 23h59m, 24h, 1610m, **and negative clamps** | display |
+
+Deleted from the v2 list: the two tests for the 5m rung (Q2 removed it) and
+"never returns a timestamp in the past" (it contradicts the cold-start case).
 
 ## Failure modes
 
