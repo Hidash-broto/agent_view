@@ -19,10 +19,10 @@ v0.1.0; everything here was considered and consciously deferred.
 
 ## Deferred from the DX phase
 
-- **M1.5 — transcript title join.** `custom-title` > `ai-title` > `last-prompt`, with
-  glob-based transcript lookup (never derive the slug — see the design doc). Deferred
-  because `cwd` basename plus name resolves the ambiguity for now. Revisit if
-  `acme/erp erp-00` still reads ambiguously after a week.
+- ~~**M1.5 — transcript title join.**~~ **SHIPPED**, and as something better than a
+  title: `src/context.ts` pulls the last prompt, last reply, branch and PR from the
+  transcript tail. A real user hit exactly the predicted problem ("I can't tell which
+  session this is from the name") within a day of the tool existing.
 - **`agentview --json`** for piping into a statusline or tmux prompt. One flag, real
   surface area. Likely the second-most-used feature; deferred only because nothing
   consumes it yet.
@@ -81,3 +81,14 @@ gets used.
 - **M1.5 — transcript title join.** `cwd` basename plus name is enough for now.
 - **`agentview --json`** for statusline/tmux piping.
 - **Brew tap and release automation.** Gated on the week of use, per the CEO phase.
+
+## Raised by use, not by review (2026-09-15)
+
+- **A `--no-transcripts` flag.** Reading transcript tails is what makes `show` and the
+  context lines work, and it is also the only part of agentview that touches message
+  content. Someone will want it off. One flag, one branch in `contextFor`.
+- **Context for non-blocked sessions.** `agentview show` works on any session, but the
+  plain list only shows context for blocked ones. Cheap to extend, unclear if wanted.
+- **Truncation is naive.** `oneLine` clips at a character count, so a long first
+  sentence can crowd out the informative part of a prompt. Clipping at a sentence
+  boundary would read better.

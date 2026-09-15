@@ -7,6 +7,8 @@
 import { humanize, absoluteTime } from "./format.ts";
 import { LADDER, MIN, HOUR, SEC } from "./ladder.ts";
 import type { Session } from "./types.ts";
+import type { SessionContext } from "./context.ts";
+import { oneLine } from "./context.ts";
 
 const useColor =
   process.env.NO_COLOR === undefined &&
@@ -84,7 +86,12 @@ export function calmFrame(sessions: Session[], now: number): string[] {
 }
 
 /** The alert frame. This one has to be impossible to miss in a scrollback. */
-export function alertFrame(blocked: Session[], now: number, all: Session[] = blocked): string[] {
+export function alertFrame(
+  blocked: Session[],
+  now: number,
+  all: Session[] = blocked,
+  ctx: Map<string, SessionContext> = new Map()
+): string[] {
   const n = blocked.length;
   const out = [
     `  ${c.bgAlert(` ${n} SESSION${n === 1 ? "" : "S"} WAITING FOR YOU `)}`,
@@ -94,11 +101,23 @@ export function alertFrame(blocked: Session[], now: number, all: Session[] = blo
     const where = s.cwd.split("/").filter(Boolean).slice(-2).join("/");
     const dur = s.durationKnown ? humanize(now - s.blockedSince) : "??";
     const since = s.durationKnown ? ` · since ${absoluteTime(s.blockedSince, now)}` : "";
+    const k = ctx.get(s.sessionId) ?? {};
+    const tags = [
+      k.branch ? c.dim(`branch ${k.branch}`) : "",
+      k.pr ? c.dim(`PR #${k.pr}`) : "",
+    ].filter(Boolean).join(c.dim(" · "));
+
     out.push(`    ${c.yellow("▸")} ${c.bold(where)}  ${c.bold(s.name)}`);
     out.push(
-      `      ${c.yellow(`waiting ${dur}`)} · ${s.waitingFor ?? "input needed"}${c.dim(since)}`
+      `      ${c.yellow(`waiting ${dur}`)} · ${s.waitingFor ?? "input needed"}${c.dim(since)}` +
+        (tags ? c.dim(" · ") + tags : "")
     );
-    out.push(`      ${c.dim(`answer it, or:  agentview ack ${ackHint(s, all)}`)}`);
+    // The single most identifying line: what YOU last asked it.
+    if (k.lastPrompt) out.push(`      ${c.dim("you asked:")} ${oneLine(k.lastPrompt, 68)}`);
+    if (k.lastSay) out.push(`      ${c.dim("it replied:")} ${c.dim(oneLine(k.lastSay, 67))}`);
+    out.push(
+      `      ${c.dim(`answer it, or:  agentview ack ${ackHint(s, all)}  ·  agentview show ${ackHint(s, all)}`)}`
+    );
     out.push("");
   }
   return out;

@@ -50,15 +50,20 @@ $ agentview watch
   12:08:31  all clear · 3 sessions · checking every 5s · Ctrl-C to stop
 ```
 
-and when one goes unanswered:
+and when one goes unanswered — with enough context to recognise it without
+opening it:
 
 ```
-   2 SESSIONS WAITING FOR YOU
+   1 SESSION WAITING FOR YOU
 
     ▸ acme/erp  erp-00
-      waiting 26h · input needed · since Mon 10:08
-      answer it, or:  agentview ack erp-0
+      waiting 26h · input needed · since Mon 10:08 · branch fix/boot · PR #920
+      you asked: can you do this same boot error problem in crm also.
+      it replied: Decisive: `createApplicationContext` throws DI errors during…
+      answer it, or:  agentview ack erp-0  ·  agentview show erp-0
 ```
+
+`agentview show` expands that into the full last exchange.
 
 ## Install
 
@@ -81,6 +86,7 @@ agentview watch              run the notifier (Ctrl-C to stop)
 agentview snooze erp 4h      quiet one session for a while
 agentview ack erp            "I handled it" — silence this block for good
 agentview unsnooze erp       undo either
+agentview show erp           what this session is about: branch, PR, last exchange
 agentview doctor             what it can see, and everything it touches
 ```
 
@@ -122,10 +128,15 @@ override, and it depends on nothing Claude Code does.
 
 ## What it reads and writes
 
-- **Reads** `~/.claude/sessions/*.json` — session state only. That directory also
-  contains `*.key` files at `0600`. agentview globs `*.json` and never lists, opens,
-  or logs anything else. [There is a test that asserts this.](test/sessions.test.ts)
-  It never reads your transcripts, prompts, or code.
+- **Reads** `~/.claude/sessions/*.json` for session state. That directory also holds
+  `*.key` files at `0600`; agentview globs `*.json` and never lists, opens, or logs
+  anything else. [There is a test that asserts it.](test/sessions.test.ts)
+- **Reads the tail of your transcripts** (`~/.claude/projects/*/<id>.jsonl`) to answer
+  "which session is this?" — the last thing you asked, the last thing Claude said, the
+  branch, any PR. Only the final ~256KB of a file is ever touched, only for sessions
+  that are actually blocked, and the content is printed to your terminal and nowhere
+  else. It is never written to the log. If you would rather it did not, there is no
+  flag for that yet — say so and it becomes one.
 - **Writes** `~/.agentview/` — `state.json`, `snoozes.json`, `agentview.log`. Nothing else.
 - **Sends** nothing. No network calls, no telemetry, no update check.
   Verify: `grep -rn 'fetch\|http' src/`

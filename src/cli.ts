@@ -4,6 +4,8 @@ import { renderBlockedRow, renderEmpty, humanize, label, labelWidth } from "./fo
 import { addSnooze, removeSnooze, loadSnoozes } from "./snoozes.ts";
 import { watch } from "./watch.ts";
 import { doctor } from "./doctor.ts";
+import { contextFor, oneLine, wrap } from "./context.ts";
+import { c } from "./ui.ts";
 import { HOUR, MIN } from "./ladder.ts";
 import type { Session } from "./types.ts";
 
@@ -15,6 +17,7 @@ const USAGE = `agentview — which Claude sessions have been waiting on you, and
   agentview snooze <name> [4h]   quiet one session for a while
   agentview ack <name>      "I handled it" — silence this block for good
   agentview unsnooze <name> undo either of the above
+  agentview show <name>     what this session is about: branch, PR, last exchange
   agentview doctor          check what agentview can see, and what it touches
 `;
 
@@ -57,6 +60,46 @@ async function main(): Promise<number> {
 
   if (cmd === "watch") {
     await watch();
+    return 0;
+  }
+
+  if (cmd === "show") {
+    const query = rest[0];
+    const { sessions } = await readSessions();
+    if (!query) {
+      console.error("agentview show: which session? Run 'agentview' to see the names.");
+      return 1;
+    }
+    const target = resolve(sessions, query);
+    if ("error" in target) { console.error(target.error); return 1; }
+    const k = await contextFor(target.sessionId);
+    const where = target.cwd.split("/").filter(Boolean).slice(-2).join("/");
+    const dur = target.durationKnown ? humanize(now - target.blockedSince) : "??";
+    const tags = [where, k.branch ? `branch ${k.branch}` : "", k.pr ? `PR #${k.pr}` : ""]
+      .filter(Boolean).join(" · ");
+
+    console.log("");
+    console.log(`  ${c.bold(target.name)}`);
+    console.log(`  ${c.dim(tags)}`);
+    console.log(
+      `  ${target.status === "waiting" ? c.yellow(`waiting ${dur} · ${target.waitingFor ?? "input needed"}`) : c.dim(`${target.status} ${dur}`)}`
+    );
+    if (k.lastPrompt) {
+      console.log("");
+      console.log(`  ${c.dim("You last said:")}`);
+      for (const l of wrap(k.lastPrompt, 72, "    ")) console.log(l);
+    }
+    if (k.lastSay) {
+      console.log("");
+      console.log(`  ${c.dim("It last said:")}`);
+      for (const l of wrap(k.lastSay, 72, "    ")) console.log(c.dim(l));
+    }
+    if (k.prUrl) { console.log(""); console.log(`  ${c.dim(k.prUrl)}`); }
+    if (!k.lastPrompt && !k.lastSay) {
+      console.log("");
+      console.log(`  ${c.dim("No transcript found for this session.")}`);
+    }
+    console.log("");
     return 0;
   }
 

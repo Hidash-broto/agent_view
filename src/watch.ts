@@ -8,6 +8,8 @@ import { tick, DEFAULT_CONFIG } from "./tick.ts";
 import { osascriptNotifier, type Notifier } from "./notify.ts";
 import * as ui from "./ui.ts";
 import { loadConfig, describe as describeConfig } from "./config.ts";
+import { contextFor } from "./context.ts";
+import type { SessionContext } from "./context.ts";
 import type { Config } from "./types.ts";
 
 async function log(line: string): Promise<void> {
@@ -106,8 +108,10 @@ export async function watch(opts: WatchOpts = {}): Promise<void> {
     }
     if (changed || heartbeatDue || first) {
       ui.clearStatus();
+      const ctx = new Map<string, SessionContext>();
+      for (const b of blockedList) ctx.set(b.sessionId, await contextFor(b.sessionId));
       const frame = blockedList.length
-        ? ui.alertFrame(blockedList, now, sessions)
+        ? ui.alertFrame(blockedList, now, sessions, ctx)
         : ui.calmFrame(sessions, now);
       for (const l of frame) print(l);
       lastSnapshot = snap;

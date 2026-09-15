@@ -23,7 +23,9 @@ export async function doctor(now = Date.now()): Promise<DoctorReport> {
   lines.push("agentview doctor");
   lines.push("");
   lines.push("Reads:");
-  lines.push(`  ${DEFAULT_DIR}/*.json   (state only — never *.key, never transcripts)`);
+  lines.push(`  ${DEFAULT_DIR}/*.json   (state only — never *.key)`);
+  lines.push(`  ~/.claude/projects/*/<id>.jsonl   (last ~256KB, blocked sessions only,`);
+  lines.push(`                                     shown on screen, never logged or sent)`);
   lines.push("Writes:");
   lines.push(`  ${STATE_PATH}`);
   lines.push(`  ${SNOOZE_PATH}`);
