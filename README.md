@@ -31,6 +31,35 @@ list of your sessions, states, and a TUI to attach to them, use
 agentview does one thing those do not: **it sorts by how long you have ignored
 something, and it tells you more than once.**
 
+```
+$ agentview watch
+
+  agentview · watching for sessions you have forgotten
+  ──────────────────────────────────────────────────────────
+
+  Watching 3 Claude sessions across 2 projects.
+  If one waits on you, I ping at 30m · 2h · 8h · 24h · 48h — then stop.
+  Nothing to configure. Leave this tab open.
+
+  ✓ Nothing is waiting on you.
+
+    ● acme/erp       erp-00       working
+    ○ acme/erp       erp-76       idle 65h  ← longest
+    ○ acme/billing   billing-a3   idle 12m
+
+  12:08:31  all clear · 3 sessions · checking every 5s · Ctrl-C to stop
+```
+
+and when one goes unanswered:
+
+```
+   2 SESSIONS WAITING FOR YOU
+
+    ▸ acme/erp  erp-00
+      waiting 26h · input needed · since Mon 10:08
+      answer it, or:  agentview ack erp-0
+```
+
 ## Install
 
 ```bash

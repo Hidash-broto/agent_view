@@ -56,8 +56,6 @@ async function main(): Promise<number> {
   }
 
   if (cmd === "watch") {
-    console.log("agentview: watching. Ctrl-C to stop.");
-    console.log("Notifications will say \"Script Editor\" — known v0.1.0 limitation.\n");
     await watch();
     return 0;
   }
