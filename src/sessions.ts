@@ -1,0 +1,187 @@
+import { readdir, readFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import type { Session, Status } from "./types.ts";
+
+/** Resolve once, in one place. AGENTVIEW_SESSIONS_DIR is the test/override hook;
+ *  CLAUDE_CONFIG_DIR is Claude Code's own variable and was previously named in an
+ *  error message without ever being read. */
+export function resolveSessionsDir(env: Record<string, string | undefined> = process.env): string {
+  if (env.AGENTVIEW_SESSIONS_DIR) return env.AGENTVIEW_SESSIONS_DIR;
+  if (env.CLAUDE_CONFIG_DIR) return join(env.CLAUDE_CONFIG_DIR, "sessions");
+  return join(homedir(), ".claude", "sessions");
+}
+
+export const DEFAULT_DIR = resolveSessionsDir();
+
+/**
+ * SAFETY: this directory is drwx------ and holds *.key files at 0600 interleaved
+ * with the JSON. We list *.json and nothing else, ever. The test asserts it.
+ */
+export async function listStateFiles(dir = DEFAULT_DIR): Promise<string[]> {
+  let entries: string[];
+  try {
+    entries = await readdir(dir);
+  } catch {
+    return [];
+  }
+  return entries.filter((n) => n.endsWith(".json")).map((n) => join(dir, n));
+}
+
+export interface ProcInfo {
+  startEpoch: number;
+  comm: string;
+}
+
+/** Liveness without a subprocess. Measured elsewhere at ~100k calls in 44ms. */
+export function aliveDefault(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e: any) {
+    // EPERM means it exists but belongs to someone else — still alive.
+    return e?.code === "EPERM";
+  }
+}
+
+/** ONE `ps` per tick, not one per session. Only needed for the reuse guard. */
+export async function readProcTable(): Promise<Map<number, ProcInfo>> {
+  const out = new Map<number, ProcInfo>();
+  try {
+    const p = Bun.spawn(["ps", "-eo", "pid=,lstart=,comm="], { stdout: "pipe", stderr: "ignore" });
+    const text = await new Response(p.stdout).text();
+    await p.exited; // never leak the fd or the zombie
+    for (const line of text.split("\n")) {
+      const t = line.trim().split(/\s+/);
+      if (t.length < 7) continue;
+      const pid = Number(t[0]);
+      if (!Number.isFinite(pid)) continue;
+      // lstart is 5 tokens: Www Mmm D HH:MM:SS YYYY
+      const d = new Date(`${t[2]} ${t[3]} ${t[5]} ${t[4]}`);
+      if (Number.isNaN(d.getTime())) continue;
+      out.set(pid, { startEpoch: d.getTime(), comm: t.slice(6).join(" ") });
+    }
+  } catch {
+    /* ps unavailable: the reuse guard degrades to liveness-only. */
+  }
+  return out;
+}
+
+export interface ReadOpts {
+  dir?: string;
+  alive?: (pid: number) => boolean;
+  /** null disables the reuse guard (tests, or ps unavailable). */
+  procs?: Map<number, ProcInfo> | null;
+  onLog?: (line: string) => void;
+  /** Injected for tests. Defaults to spawning `claude agents --json`. */
+  cliFallback?: () => Promise<any[] | null>;
+}
+
+function validate(o: any): boolean {
+  return (
+    o && typeof o.sessionId === "string" && typeof o.pid === "number" &&
+    typeof o.cwd === "string" && typeof o.status === "string"
+  );
+}
+
+/** Retry once before believing a parse failure: Claude Code writes these files in
+ *  place rather than via atomic rename, so a torn read is possible and is NOT
+ *  the same thing as the schema having drifted. */
+async function readJsonWithRetry(path: string): Promise<any | null> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      return JSON.parse(await readFile(path, "utf8"));
+    } catch {
+      if (attempt === 0) await Bun.sleep(50);
+    }
+  }
+  return null;
+}
+
+export async function claudeAgentsJson(): Promise<any[] | null> {
+  try {
+    const p = Bun.spawn(["claude", "agents", "--json"], { stdout: "pipe", stderr: "ignore" });
+    const text = await new Response(p.stdout).text();
+    await p.exited;
+    const parsed = JSON.parse(text);
+    return Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+export interface ReadResult {
+  sessions: Session[];
+  /** true when we fell back to the CLI and therefore have no durations. */
+  degraded: boolean;
+}
+
+export async function readSessions(opts: ReadOpts = {}): Promise<ReadResult> {
+  const dir = opts.dir ?? DEFAULT_DIR;
+  const alive = opts.alive ?? aliveDefault;
+  const log = opts.onLog ?? (() => {});
+  const files = await listStateFiles(dir);
+
+  if (files.length === 0) {
+    const rows = await (opts.cliFallback ?? claudeAgentsJson)();
+    if (!rows) return { sessions: [], degraded: true };
+    log("state dir unavailable — using `claude agents --json`; durations unavailable");
+    return {
+      sessions: rows.filter(validate).map((o) => ({
+        sessionId: o.sessionId, pid: o.pid, name: o.name ?? o.sessionId.slice(0, 8),
+        nameSource: o.nameSource ?? "derived", cwd: o.cwd, status: o.status as Status,
+        waitingFor: o.waitingFor, blockedSince: 0, startedAt: o.startedAt ?? 0,
+        durationKnown: false,
+      })),
+      degraded: true,
+    };
+  }
+
+  const procs = opts.procs === undefined ? await readProcTable() : opts.procs;
+  const sessions: Session[] = [];
+
+  for (const f of files) {
+    const o = await readJsonWithRetry(f);
+    if (!o) { log(`unreadable after retry: ${f}`); continue; }
+    if (!validate(o)) { log(`shape drift: ${f}`); continue; }
+    if (!alive(o.pid)) continue;
+
+    // Pid-reuse guard. Use startedAt (epoch ms) — NEVER procStart, which this file
+    // writes in UTC while formatting it like a local timestamp.
+    if (procs && typeof o.startedAt === "number" && o.startedAt > 0) {
+      const p = procs.get(o.pid);
+      if (p) {
+        if (Math.abs(p.startEpoch - o.startedAt) > 5_000) {
+          log(`pid ${o.pid} was recycled — dropping stale ${o.sessionId.slice(0, 8)}`);
+          continue;
+        }
+        if (p.comm && !p.comm.toLowerCase().includes("claude")) {
+          log(`pid ${o.pid} is not claude (${p.comm}) — dropping stale entry`);
+          continue;
+        }
+      }
+    }
+
+    const hasTs = typeof o.statusUpdatedAt === "number" && o.statusUpdatedAt > 0;
+    sessions.push({
+      sessionId: o.sessionId, pid: o.pid, name: o.name ?? o.sessionId.slice(0, 8),
+      nameSource: o.nameSource ?? "derived", cwd: o.cwd, status: o.status as Status,
+      waitingFor: o.waitingFor,
+      blockedSince: hasTs ? o.statusUpdatedAt : 0,
+      startedAt: typeof o.startedAt === "number" ? o.startedAt : 0,
+      durationKnown: hasTs,
+    });
+  }
+  return { sessions, degraded: false };
+}
+
+/** Blocked sessions, longest wait first. Ties broken by sessionId so output is stable. */
+export function blockedOf(sessions: Session[]): Session[] {
+  return sessions
+    .filter((s) => s.status === "waiting")
+    .sort((a, b) =>
+      a.blockedSince !== b.blockedSince
+        ? a.blockedSince - b.blockedSince
+        : a.sessionId.localeCompare(b.sessionId)
+    );
+}
