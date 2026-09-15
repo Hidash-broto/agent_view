@@ -11,7 +11,7 @@ agentview answers the question none of them ask: **what have I abandoned?**
 ```
 $ agentview
 
-  BLOCKED  26h  acme/erp         erp-00         input needed since Mon 08:56
+  BLOCKED  26h  acme/erp      erp-00      input needed since Mon 08:56
   BLOCKED   6h  acme/billing  billing-a3  input needed since 04:56
 
   2 waiting. Oldest 26h.
