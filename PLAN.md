@@ -155,7 +155,7 @@ Never fabricate a duration.
 
 ```
 src/
-  cli.ts         arg parse: (none) | watch | snooze <name> [dur] | doctor
+  cli.ts         arg parse: (none) | watch | snooze <name> [dur] | ack <name> | doctor
   sessions.ts    read *.json, validate, liveness, pid-reuse guard, CLI fallback
   ladder.ts      PURE. dueAt, highestDueRung. No I/O, no Date.now().
   format.ts      PURE. humanize, absoluteTime, renderRow, renderEmpty
@@ -200,12 +200,46 @@ type State = Record<string, SessionState>;   // key: `${sessionId}:${blockedSinc
 daemon restart cannot shift or reset the schedule.
 
 ```ts
-const LADDER = [30*MIN, 2*HOUR, 8*HOUR];     // Q2 removed the 5m rung
-const DAILY  = 24*HOUR;
+const LADDER = [30*MIN, 2*HOUR, 8*HOUR, 24*HOUR, 48*HOUR];   // FINITE. See below.
+const MAX_RUNG = LADDER.length - 1;        // after this: silent, list-only
 
 function dueAt(blockedSince: number, rung: number): number;
 function highestDueRung(blockedSince: number, now: number): number;  // -1 if none due
+function isExhausted(rung: number): boolean { return rung >= MAX_RUNG; }
 ```
+
+### The ladder is FINITE, and that is a correctness decision, not a UX one
+
+The v2 design said "then daily, forever." That made the product's correctness depend
+on a field we do not own: if `status` ever fails to leave `waiting` after the user
+answers, agentview nags forever about something already handled, and the user's only
+recourse is the macOS global mute — which is invisible to us and permanent (N3).
+
+**We could not verify that `status` always clears.** A 15-minute live monitor captured
+zero transitions (nothing blocked during the window). The one historical data point we
+have is good — `billing-a3` went `waiting 369m` to `idle` on its own — but one
+observation is not a guarantee, and the backup signal we hoped to use is unusable:
+transcript mtime advances for reasons unrelated to user activity (three transcripts
+touched 48m ago whose newest records were from the previous day).
+
+So we stop depending on it:
+
+1. **Bounded escalation.** Five notifications, ever, per block: 30m, 2h, 8h, 24h, 48h.
+   Then silent. The session still appears in `agentview` output with its true duration.
+   Worst case if `status` is sticky is **five wrong notifications spread over two
+   days**, not an unbounded stream. Bounded blast radius by construction.
+2. **`agentview ack <name>` — a manual kill switch that cannot fail.** Writes to
+   `snoozes.json` keyed on `(sessionId, blockedSince)`. Silences *this block*
+   permanently, with no expiry. A genuinely new block gets a new `blockedSince`, so it
+   notifies normally. This is the user's guaranteed override and it depends on nothing
+   Claude Code does.
+   `snooze` remains the temporary form; `ack` is "I handled it, never mention it again."
+3. **Fresh-activity reset.** If `statusUpdatedAt` changes while `status` is still
+   `waiting`, something transitioned. Reset the ladder to rung 0 rather than continuing
+   to climb — a new question in the same session deserves a fresh 30m, not the 48h rung.
+
+**Principle: never let correctness depend on a field you do not own. Bound the damage
+and give the user an override that routes around it entirely.**
 
 **`tick.ts` — the seam the review found missing.** Everything hard happens here, and
 it is pure, so everything hard is table-testable with no clock and no filesystem.
@@ -242,6 +276,9 @@ like correct behaviour; write those first.
 | 4 | clock steps backwards: no notification, no negative, logs "clock" | L6 |
 | 5 | snoozed session emits nothing; expired snooze emits | C1 |
 | 6 | `status !== waiting` never emits | criterion 3 |
+| 6a | **ladder exhausts at rung 4; a 30-day block emits exactly 5 notifications total** | sticky-status blast radius |
+| 6b | **`ack` silences this block forever; a new `blockedSince` notifies again** | manual override |
+| 6c | **`statusUpdatedAt` moving while still `waiting` resets the ladder to rung 0** | fresh question |
 
 **`state.test.ts` — silent-failure territory**
 | # | Test | Guards |
