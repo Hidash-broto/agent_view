@@ -43,8 +43,8 @@ describe("frames", () => {
   test("the header states what will happen, in plain words", () => {
     const h = header(sessions).join("\n");
     expect(h).toContain("Watching 3 Claude sessions");
-    expect(h).toContain("30m");
-    expect(h).toContain("48h");
+    expect(h).toContain("30s");   // the fast first ping
+    expect(h).toContain("24h");
   });
 
   test("the calm frame says nothing is waiting and marks the longest idle", () => {

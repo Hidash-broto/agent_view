@@ -38,7 +38,7 @@ $ agentview watch
   ──────────────────────────────────────────────────────────
 
   Watching 3 Claude sessions across 2 projects.
-  If one waits on you, I ping at 30m · 2h · 8h · 24h · 48h — then stop.
+  If one waits on you, I ping at 30s · 30m · 2h · 8h · 24h — then stop.
   Nothing to configure. Leave this tab open.
 
   ✓ Nothing is waiting on you.
@@ -93,18 +93,26 @@ are one character apart and one of them is the blocked one.
 ```
   blocked
      |
-   30m  ── "erp-00 waiting 30m"      Blocked since 10:21.
+   30s  ── "erp-00 waiting 30s"      Blocked since 10:21.
+     |                               ↑ answer within 30s and you hear nothing
+   30m  ── "erp-00 waiting 30m"      Nothing since 10:21. Or: agentview ack erp-00
      |
-    2h  ── "erp-00 waiting 2h"       Nothing since 08:51. Or: agentview ack erp-00
+    2h  ── "erp-00 waiting 2h"       Still blocked since 08:51.
      |
     8h  ── "erp-00 waiting 8h"       Still blocked since 02:51.
      |
-   24h  ── "erp-00 waiting 26h"      Still blocked since Mon 08:57.
-     |
-   48h  ── "erp-00 waiting 50h"      Last reminder. Still blocked since Sun 08:57.
+   24h  ── "erp-00 waiting 26h"      Last reminder. Still blocked since Mon 08:57.
      |
    silent — still listed by `agentview`, never notified again
 ```
+
+Change any of it in `~/.agentview/config.json` (optional, read if present):
+
+```json
+{ "ladder": ["30s", "30m", "2h", "8h", "24h"], "poll": "5s" }
+```
+
+`agentview doctor` prints the ladder actually in effect and where it came from.
 
 **The ladder is finite on purpose.** agentview decides whether to nag you by reading
 one field written by another program. We could not prove that field always clears

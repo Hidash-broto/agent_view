@@ -8,6 +8,8 @@
 import { DEFAULT_DIR, listStateFiles, readSessions, claudeAgentsJson } from "./sessions.ts";
 import { DIR, STATE_PATH } from "./state.ts";
 import { SNOOZE_PATH } from "./snoozes.ts";
+import { loadConfig, describe as describeConfig, CONFIG_PATH } from "./config.ts";
+import { DEFAULT_CONFIG } from "./tick.ts";
 
 export interface DoctorReport {
   lines: string[];
@@ -27,6 +29,12 @@ export async function doctor(now = Date.now()): Promise<DoctorReport> {
   lines.push(`  ${SNOOZE_PATH}`);
   lines.push(`  ${DIR}/agentview.log`);
   lines.push("Sends: nothing. No network calls. Verify with: grep -rn 'fetch\\|http' src/");
+  lines.push("");
+
+  const { config, source, warnings } = await loadConfig(DEFAULT_CONFIG);
+  lines.push(`Ladder: ${describeConfig(config)}`);
+  lines.push(`        from ${source === "file" ? CONFIG_PATH : "built-in defaults"}`);
+  for (const w of warnings) lines.push(`        ${w}`);
   lines.push("");
 
   const files = await listStateFiles();

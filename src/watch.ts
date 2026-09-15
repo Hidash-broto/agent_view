@@ -7,6 +7,7 @@ import { loadSnoozes } from "./snoozes.ts";
 import { tick, DEFAULT_CONFIG } from "./tick.ts";
 import { osascriptNotifier, type Notifier } from "./notify.ts";
 import * as ui from "./ui.ts";
+import { loadConfig, describe as describeConfig } from "./config.ts";
 import type { Config } from "./types.ts";
 
 async function log(line: string): Promise<void> {
@@ -40,7 +41,8 @@ function snapshot(sessions: { status: string; sessionId: string; blockedSince: n
 }
 
 export async function watch(opts: WatchOpts = {}): Promise<void> {
-  const config = opts.config ?? DEFAULT_CONFIG;
+  const loaded = opts.config ? null : await loadConfig(DEFAULT_CONFIG);
+  const config = opts.config ?? loaded!.config;
   const notify = opts.notifier ?? osascriptNotifier;
   const print = opts.print ?? ((l: string) => console.log(l));
   let iterations = 0;
@@ -50,7 +52,8 @@ export async function watch(opts: WatchOpts = {}): Promise<void> {
   let lastHeartbeat = 0;
   const HEARTBEAT_MS = 10 * 60_000;
 
-  await log(`watch started (poll ${config.pollMs}ms, ${config.ladderMs.length} rungs)`);
+  await log(`watch started (poll ${config.pollMs}ms, ladder ${describeConfig(config)})`);
+  for (const w of loaded?.warnings ?? []) { print(`  ${w}`); await log(w); }
   const stop = () => { ui.clearStatus(); console.log("\n  stopped.\n"); process.exit(0); };
   process.on("SIGINT", stop);
   process.on("SIGTERM", stop);
@@ -99,7 +102,7 @@ export async function watch(opts: WatchOpts = {}): Promise<void> {
 
     if (first) {
       ui.clearStatus();
-      for (const l of ui.header(sessions)) print(l);
+      for (const l of ui.header(sessions, config.ladderMs)) print(l);
     }
     if (changed || heartbeatDue || first) {
       ui.clearStatus();

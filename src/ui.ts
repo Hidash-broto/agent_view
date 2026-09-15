@@ -5,7 +5,7 @@
  *  and does anything need me. Everything here serves those three. */
 
 import { humanize, absoluteTime } from "./format.ts";
-import { LADDER } from "./ladder.ts";
+import { LADDER, MIN, HOUR, SEC } from "./ladder.ts";
 import type { Session } from "./types.ts";
 
 const useColor =
@@ -33,12 +33,17 @@ export function clock(ms: number): string {
     .join(":");
 }
 
-function ladderSummary(): string {
-  return LADDER.map((ms) => humanize(ms)).join(" · ");
+function rung(ms: number): string {
+  if (ms < MIN) return `${Math.round(ms / SEC)}s`;
+  if (ms < HOUR) return `${Math.round(ms / MIN)}m`;
+  return `${Math.round(ms / HOUR)}h`;
+}
+function ladderSummary(ladder: readonly number[]): string {
+  return ladder.map(rung).join(" · ");
 }
 
 /** Printed once, at startup. Tells a first-time user what is about to happen. */
-export function header(sessions: Session[]): string[] {
+export function header(sessions: Session[], ladder: readonly number[] = LADDER): string[] {
   const projects = new Set(sessions.map((s) => s.cwd)).size;
   return [
     "",
@@ -47,7 +52,7 @@ export function header(sessions: Session[]): string[] {
     "",
     `  Watching ${c.bold(String(sessions.length))} Claude session${sessions.length === 1 ? "" : "s"}` +
       ` across ${c.bold(String(projects))} project${projects === 1 ? "" : "s"}.`,
-    `  ${c.dim(`If one waits on you, I ping at ${ladderSummary()} — then stop.`)}`,
+    `  ${c.dim(`If one waits on you, I ping at ${ladderSummary(ladder)} — then stop.`)}`,
     `  ${c.dim("Nothing to configure. Leave this tab open.")}`,
     "",
   ];

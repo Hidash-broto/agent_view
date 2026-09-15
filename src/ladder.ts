@@ -16,12 +16,15 @@ export const SEC = 1_000;
 export const MIN = 60 * SEC;
 export const HOUR = 60 * MIN;
 
+/** Rung 0 is deliberately 30s rather than 0: if you answer straight away, which is
+ *  the common case while you are actually at the keyboard, you get nothing. Miss it
+ *  by half a minute and you are told. Override any of this in config.json. */
 export const LADDER: readonly number[] = [
+  30 * SEC,
   30 * MIN,
   2 * HOUR,
   8 * HOUR,
   24 * HOUR,
-  48 * HOUR,
 ];
 
 export const MAX_RUNG = LADDER.length - 1;

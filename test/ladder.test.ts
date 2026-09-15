@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { dueAt, highestDueRung, isExhausted, elapsed, LADDER, MAX_RUNG, MIN, HOUR } from "../src/ladder.ts";
+import { dueAt, highestDueRung, isExhausted, elapsed, LADDER, MAX_RUNG, SEC, MIN, HOUR } from "../src/ladder.ts";
 import { humanize, absoluteTime } from "../src/format.ts";
 
 const T0 = 1_700_000_000_000;
@@ -16,14 +16,20 @@ describe("ladder", () => {
     }
   });
 
-  test("T21 rung boundaries", () => {
+  test("T21 rung boundaries follow the ladder, whatever it is set to", () => {
     expect(highestDueRung(T0, T0)).toBe(-1);
-    expect(highestDueRung(T0, T0 + 30 * MIN - 1)).toBe(-1);
-    expect(highestDueRung(T0, T0 + 30 * MIN)).toBe(0);
-    expect(highestDueRung(T0, T0 + 2 * HOUR)).toBe(1);
-    expect(highestDueRung(T0, T0 + 8 * HOUR)).toBe(2);
-    expect(highestDueRung(T0, T0 + 24 * HOUR)).toBe(3);
-    expect(highestDueRung(T0, T0 + 48 * HOUR)).toBe(4);
+    expect(highestDueRung(T0, T0 + LADDER[0]! - 1)).toBe(-1);
+    for (let i = 0; i < LADDER.length; i++) {
+      expect(highestDueRung(T0, T0 + LADDER[i]!)).toBe(i);
+    }
+  });
+
+  test("the default ladder pings fast, then escalates, then stops", () => {
+    expect(LADDER[0]).toBe(30 * SEC);          // fast enough to feel immediate
+    expect(LADDER.length).toBeLessThanOrEqual(6); // bounded blast radius
+    for (let i = 1; i < LADDER.length; i++) {
+      expect(LADDER[i]!).toBeGreaterThan(LADDER[i - 1]!); // strictly escalating
+    }
   });
 
   test("the top rung is a ceiling: 30 days is still rung 4", () => {
