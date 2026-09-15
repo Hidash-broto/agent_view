@@ -34,11 +34,14 @@ something, and it tells you more than once.**
 ## Install
 
 ```bash
+git clone https://github.com/Hidash-broto/agent_view.git
+cd agent_view
 bun install
-bun run build     # produces ./agentview, a standalone ~60MB binary
+bun run build                    # produces ./agentview, a standalone ~60MB binary
+cp agentview ~/.local/bin/       # or anywhere on your PATH
 ```
 
-No Homebrew tap yet. That waits until the tool has earned it.
+Check it: `agentview doctor` should print what it can see. No Homebrew tap yet.
 
 ## Use
 
