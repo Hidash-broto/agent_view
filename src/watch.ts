@@ -27,7 +27,7 @@ export interface WatchOpts {
   notifier?: Notifier;
   /** Test hook: stop after N iterations instead of running forever. */
   maxIterations?: number;
-  onCycle?: (info: { now: number; blocked: number; sent: number }) => void;
+  onCycle?: (info: { now: number; blocked: number; sent: number; wrote: boolean }) => void;
   /** Print live status to stdout. A daemon that prints nothing is
    *  indistinguishable from a daemon that has crashed. */
   print?: (line: string) => void;
@@ -93,7 +93,7 @@ export async function watch(opts: WatchOpts = {}): Promise<void> {
     }
     for (const l of out.logLines) await log(l);
 
-    await saveState(out.nextState);
+    const wrote = await saveState(out.nextState);
 
     // Show your work. Print on first tick, on any change to the blocked set, and
     // on a slow heartbeat so a quiet machine still proves the daemon is alive.
@@ -121,7 +121,7 @@ export async function watch(opts: WatchOpts = {}): Promise<void> {
     ui.writeStatus(ui.statusText(now, sessions.length, blockedList.length, config.pollMs));
 
     const blocked = blockedList.length;
-    opts.onCycle?.({ now, blocked, sent });
+    opts.onCycle?.({ now, blocked, sent, wrote });
 
     iterations++;
     if (opts.maxIterations && iterations >= opts.maxIterations) return;

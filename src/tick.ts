@@ -18,6 +18,12 @@ export const DEFAULT_CONFIG: Config = {
   stateTtlMs: 7 * 24 * 60 * 60 * 1000,
 };
 
+/** lastSeenAt only feeds a 7-day GC, so second-level precision is pointless — and
+ *  storing `now` verbatim makes the state differ on every single tick, which defeats
+ *  the write-dedupe and costs an SSD flush every 5 seconds. Quantise it. */
+export const SEEN_GRANULARITY_MS = 5 * 60_000;
+const seenAt = (now: number) => Math.floor(now / SEEN_GRANULARITY_MS) * SEEN_GRANULARITY_MS;
+
 export interface TickInput {
   now: number;
   sessions: Session[];
@@ -102,7 +108,7 @@ export function tick(input: TickInput): TickOutput {
       logLines.push(`clock: ${s.name} blockedSince is ${s.blockedSince - now}ms in the future`);
       nextState[key] = {
         sessionId: s.sessionId, blockedSince: s.blockedSince,
-        lastRung, lastNotifiedAt: prev?.lastNotifiedAt ?? null, lastSeenAt: now,
+        lastRung, lastNotifiedAt: prev?.lastNotifiedAt ?? null, lastSeenAt: seenAt(now),
       };
       continue;
     }
@@ -119,7 +125,7 @@ export function tick(input: TickInput): TickOutput {
       // lastRung advances ONLY on delivery, so a snoozed rung is re-offered later.
       lastRung: shouldFire ? due : lastRung,
       lastNotifiedAt: shouldFire ? now : prev?.lastNotifiedAt ?? null,
-      lastSeenAt: now,
+      lastSeenAt: seenAt(now),
     };
 
     if (shouldFire && due >= ladder.length - 1) {
@@ -154,7 +160,7 @@ export function seedFrom(sessions: Session[], now: number, ladder = LADDER): Sta
     const rung = highestDueRung(s.blockedSince, now, ladder);
     out[stateKey(s.sessionId, s.blockedSince)] = {
       sessionId: s.sessionId, blockedSince: s.blockedSince,
-      lastRung: rung, lastNotifiedAt: rung >= 0 ? now : null, lastSeenAt: now,
+      lastRung: rung, lastNotifiedAt: rung >= 0 ? now : null, lastSeenAt: seenAt(now),
     };
   }
   return out;

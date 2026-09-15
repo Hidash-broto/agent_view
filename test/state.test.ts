@@ -2,7 +2,7 @@ import { describe, expect, test, beforeEach, afterEach } from "bun:test";
 import { mkdtemp, rm, writeFile, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadState, saveState } from "../src/state.ts";
+import { loadState, saveState, resetWriteCache } from "../src/state.ts";
 import { addSnooze, loadSnoozes, removeSnooze, prune } from "../src/snoozes.ts";
 import { stateKey } from "../src/types.ts";
 import type { Session, State } from "../src/types.ts";
@@ -18,7 +18,7 @@ const blocked: Session = {
   blockedSince: T0, startedAt: T0, durationKnown: true,
 };
 
-beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), "agentview-state-")); });
+beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), "agentview-state-")); resetWriteCache(); });
 afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
 
 describe("state durability", () => {
@@ -33,7 +33,9 @@ describe("state durability", () => {
   test("T8 a corrupt state file recovers from .bak before considering a reset", async () => {
     const good: State = { [stateKey("a", T0)]: { sessionId: "a", blockedSince: T0, lastRung: 3, lastNotifiedAt: T0, lastSeenAt: T0 } };
     await saveState(good, paths());
-    await saveState(good, paths());          // second write populates .bak
+    // A second, genuinely different write is what rolls the previous one into .bak.
+    // (An identical write is skipped now — see the dedupe test below.)
+    await saveState({ ...good, [stateKey("b", T0)]: { sessionId: "b", blockedSince: T0, lastRung: 0, lastNotifiedAt: T0, lastSeenAt: T0 } }, paths());
     await writeFile(paths().state, "{{{ corrupt");
 
     const { state, recovery } = await loadState([blocked], T0 + HOUR, paths());
@@ -51,6 +53,15 @@ describe("state durability", () => {
     expect(recovery).toBe("seeded");
     const entry = state[stateKey(blocked.sessionId, blocked.blockedSince)]!;
     expect(entry.lastRung).toBeGreaterThanOrEqual(3);
+  });
+
+  test("an unchanged state is not rewritten — no fsync, no SSD flush", async () => {
+    // At a 5s poll this is ~17,000 writes a day that would otherwise be identical.
+    const s: State = { [stateKey("a", T0)]: { sessionId: "a", blockedSince: T0, lastRung: 1, lastNotifiedAt: T0, lastSeenAt: T0 } };
+    expect(await saveState(s, paths())).toBe(true);
+    expect(await saveState(s, paths())).toBe(false);
+    expect(await saveState({ ...s }, paths())).toBe(false);   // structurally identical
+    expect(await saveState({}, paths())).toBe(true);          // genuinely different
   });
 
   test("a missing state file is 'empty', not an error and not a seed", async () => {

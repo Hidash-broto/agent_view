@@ -190,3 +190,28 @@ describe("coalescing and recovery", () => {
     expect(out.notifications).toHaveLength(0);
   });
 });
+
+describe("idle cost", () => {
+  test("repeated ticks produce byte-identical state, so nothing is rewritten", () => {
+    // lastSeenAt used to store `now` verbatim, so the state differed every tick and
+    // the daemon fsynced state.json every 5 seconds forever. It is quantised now.
+    const s = sess();
+    let state: State = {};
+    const seen = new Set<string>();
+    for (let i = 0; i < 20; i++) {
+      const out = tick({ now: T0 + 3 * HOUR + i * 5000, sessions: [s], state, snoozes: noSnooze });
+      state = out.nextState;
+      seen.add(JSON.stringify(state));
+    }
+    // One shape while the rung fires, one after. Never twenty.
+    expect(seen.size).toBeLessThanOrEqual(2);
+  });
+
+  test("lastSeenAt still advances enough for the 7-day GC to work", () => {
+    const s = sess();
+    const a = tick({ now: T0 + 3 * HOUR, sessions: [s], state: {}, snoozes: noSnooze });
+    const b = tick({ now: T0 + 3 * HOUR + 8 * 60_000, sessions: [s], state: a.nextState, snoozes: noSnooze });
+    const k = stateKey(s.sessionId, s.blockedSince);
+    expect(b.nextState[k]!.lastSeenAt).toBeGreaterThan(a.nextState[k]!.lastSeenAt);
+  });
+});

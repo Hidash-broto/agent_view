@@ -143,6 +143,31 @@ override, and it depends on nothing Claude Code does.
 
 `agentview doctor` prints all of the above, every time.
 
+## What it costs to leave running
+
+Measured on an M-series MacBook Air, 6 live sessions, default 5s poll:
+
+| | idle | with a session blocked |
+|---|---|---|
+| CPU | **0.015% of one core** (~0.5s/hour) | **0.034%** (~1.2s/hour) |
+| Disk writes | 0 | **0** while nothing changes |
+| `ps` spawns | 4/hour | 4/hour |
+| Memory | ~57MB resident | ~62MB |
+
+Three things make it cheap, and each was a real fix rather than a default:
+
+- **State is only written when it actually changes.** The naive version fsynced
+  `state.json` on every tick — 17,280 SSD flushes a day to rewrite identical bytes.
+  It also needed `lastSeenAt` quantised to 5 minutes, because storing `now` verbatim
+  made the state differ every tick and defeated the check.
+- **`ps` is cached.** It exists only to catch a recycled pid, which can only happen
+  when the set of pids changes. 720 fork+execs an hour became 4.
+- **Transcript tails are cached on (mtime, size)**, so a busy session is re-read only
+  when it actually grows.
+
+The ~60MB resident is the embedded Bun runtime, not agentview's own data. That is the
+honest cost of `bun build --compile`; a Go or Rust build would be a few MB.
+
 ## Known limitations in v0.1.0
 
 - **Notifications say "Script Editor."** `osascript` posts under the scripting host,

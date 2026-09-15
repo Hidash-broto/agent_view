@@ -44,6 +44,27 @@ export function aliveDefault(pid: number): boolean {
   }
 }
 
+let procCache: { at: number; pids: string; table: Map<number, ProcInfo> } | null = null;
+export const PROC_CACHE_MS = 60_000;
+
+export function resetProcCache(): void {
+  procCache = null;
+}
+
+/** The proc table exists only to catch a recycled pid. That can only change when
+ *  the set of pids we care about changes — so spawn `ps` then, or once a minute,
+ *  rather than every single tick. A fork+exec every 5s is the other half of this
+ *  program's idle cost. */
+export async function cachedProcTable(pids: number[], now = Date.now()): Promise<Map<number, ProcInfo>> {
+  const key = [...pids].sort((a, b) => a - b).join(",");
+  if (procCache && procCache.pids === key && now - procCache.at < PROC_CACHE_MS) {
+    return procCache.table;
+  }
+  const table = await readProcTable();
+  procCache = { at: now, pids: key, table };
+  return table;
+}
+
 /** ONE `ps` per tick, not one per session. Only needed for the reuse guard. */
 export async function readProcTable(): Promise<Map<number, ProcInfo>> {
   const out = new Map<number, ProcInfo>();
@@ -137,15 +158,23 @@ export async function readSessions(opts: ReadOpts = {}): Promise<ReadResult> {
     };
   }
 
-  const procs = opts.procs === undefined ? await readProcTable() : opts.procs;
-  const sessions: Session[] = [];
-
+  // Parse first so we know which pids matter, then consult the (cached) proc table.
+  const parsed: any[] = [];
   for (const f of files) {
     const o = await readJsonWithRetry(f);
     if (!o) { log(`unreadable after retry: ${f}`); continue; }
     if (!validate(o)) { log(`shape drift: ${f}`); continue; }
     if (!alive(o.pid)) continue;
+    parsed.push(o);
+  }
 
+  const procs =
+    opts.procs === undefined
+      ? await cachedProcTable(parsed.map((o) => o.pid))
+      : opts.procs;
+  const sessions: Session[] = [];
+
+  for (const o of parsed) {
     // Pid-reuse guard. Use startedAt (epoch ms) — NEVER procStart, which this file
     // writes in UTC while formatting it like a local timestamp.
     if (procs && typeof o.startedAt === "number" && o.startedAt > 0) {

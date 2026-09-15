@@ -59,11 +59,33 @@ export async function loadState(
   return { state: seedFrom(liveSessions, now), recovery: "seeded" };
 }
 
+let lastWritten: string | null = null;
+
+/** Only used by tests, to make each case independent. */
+export function resetWriteCache(): void {
+  lastWritten = null;
+}
+
 /** tmp → fsync → rename. Atomic on APFS: a reader sees the old file or the new one,
- *  never a torn one, and power loss mid-write leaves the previous good file. */
+ *  never a torn one, and power loss mid-write leaves the previous good file.
+ *
+ *  Returns false when the state is byte-identical to what we last wrote. An fsync
+ *  forces an SSD flush; doing that every 5 seconds forever, to rewrite the same
+ *  bytes, is the single most expensive thing this program could do to a laptop. */
 export async function saveState(
   state: State,
   paths = { state: STATE_PATH, bak: BAK_PATH }
+): Promise<boolean> {
+  const serialized = JSON.stringify(state, null, 0);
+  if (serialized === lastWritten) return false;
+  await writeStateFile(serialized, paths);
+  lastWritten = serialized;
+  return true;
+}
+
+async function writeStateFile(
+  serialized: string,
+  paths: { state: string; bak: string }
 ): Promise<void> {
   await ensureDir(join(paths.state, ".."));
   const tmp = `${paths.state}.tmp`;
@@ -74,7 +96,7 @@ export async function saveState(
   }
   const fh = await open(tmp, "w");
   try {
-    await fh.writeFile(JSON.stringify(state, null, 0));
+    await fh.writeFile(serialized);
     await fh.sync();
   } finally {
     await fh.close();
@@ -83,6 +105,7 @@ export async function saveState(
 }
 
 export async function clearState(paths = { state: STATE_PATH, bak: BAK_PATH }): Promise<void> {
+  lastWritten = null;
   for (const p of [paths.state, paths.bak, `${paths.state}.tmp`]) {
     try { await unlink(p); } catch { /* already gone */ }
   }
