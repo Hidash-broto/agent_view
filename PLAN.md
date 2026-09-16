@@ -1035,9 +1035,13 @@ emit a burst. **Degrade quiet, never loud.**
 files for dead pids 550/39340/68432 prove cleanup is not universal; highest live pid
 93111 against a 99999 wrap is days away, not months. A stale `waiting` file whose pid
 gets reused escalates forever with nothing to answer.
-**Fix supersedes primary E1:** do not parse `procStart` at all. The JSON already
-carries `startedAt` as **epoch ms**. Compare it to parsed `ps lstart` with a 5s
-tolerance (1s skew measured), and require `comm` to contain `claude`. Plus a hard cap:
+**Fix — CORRECTED 2026-09-16 after this shipped and was wrong.** Use `procStart`,
+parsed as UTC. It is the PROCESS start time and matches `ps -o lstart=` to **0.0s on
+every session**. `startedAt` is the SESSION start time; for a background session on a
+pre-warmed spare the two differ by however long the spare sat pooled — **34 minutes
+measured** — which a 5s tolerance reads as a recycled pid, silently dropping a live
+session. Keep `startedAt` only as a loose fallback when `procStart` is absent, and
+require `comm` to contain `claude`. Plus a hard cap:
 stop escalating after 7 continuous days on a byte-identical file, and tell `doctor`.
 
 **C4 — `process.kill(pid,0)` instead of spawning `ps`.** Measured by the subagent:

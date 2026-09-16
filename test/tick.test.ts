@@ -12,6 +12,7 @@ function sess(over: Partial<Session> = {}): Session {
     pid: 1234,
     name: "erp-00",
     nameSource: "derived",
+    kind: "interactive",
     cwd: "/Users/x/acme/erp",
     status: "waiting",
     waitingFor: "input needed",

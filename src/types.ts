@@ -8,6 +8,8 @@ export interface Session {
   /** "derived" = cwd slug (no real name). "user" = /rename. "auto" = Claude generated it. */
   nameSource: string;
   cwd: string;
+  /** "bg" sessions are backgrounded agents; interactive ones are a terminal you sit in. */
+  kind: "interactive" | "background";
   status: Status;
   waitingFor?: string;
   /** statusUpdatedAt. A TRANSITION timestamp, not a heartbeat. Verified 2026-09-10. */

@@ -2,7 +2,7 @@ import { describe, expect, test, beforeEach, afterEach } from "bun:test";
 import { mkdtemp, rm, writeFile, chmod } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { listStateFiles, readSessions, blockedOf, aliveDefault } from "../src/sessions.ts";
+import { listStateFiles, readSessions, blockedOf, aliveDefault, parseProcStartUtc } from "../src/sessions.ts";
 import type { ProcInfo } from "../src/sessions.ts";
 
 let dir = "";
@@ -58,13 +58,15 @@ describe("liveness and pid reuse", () => {
     // procStart in these files is UTC formatted as a local-looking string, so
     // comparing it to `ps lstart` mismatches by the machine's TZ offset on every
     // session. We compare startedAt (epoch ms) instead, which has no such trap.
-    await writeFile(join(dir, "5555.json"), raw({ pid: 5555, startedAt: T0 }));
-
-    const recycled = new Map<number, ProcInfo>([[5555, { startEpoch: T0 + 60_000, comm: "claude" }]]);
-    const ok = new Map<number, ProcInfo>([[5555, { startEpoch: T0 + 1_000, comm: "claude" }]]);
-
-    expect((await readSessions({ dir, alive: () => true, procs: recycled })).sessions).toHaveLength(0);
-    expect((await readSessions({ dir, alive: () => true, procs: ok })).sessions).toHaveLength(1);
+    return (async () => {
+      await writeFile(join(dir, "5555.json"), raw({ pid: 5555, startedAt: T0, procStart: undefined }));
+      // Wide tolerance: startedAt measures the session, not the process, so a small
+      // gap proves nothing either way. Only an implausible gap is treated as reuse.
+      const near = new Map<number, ProcInfo>([[5555, { startEpoch: T0 + 60_000, comm: "claude" }]]);
+      const wild = new Map<number, ProcInfo>([[5555, { startEpoch: T0 + 8 * 3600_000, comm: "claude" }]]);
+      expect((await readSessions({ dir, alive: () => true, procs: near })).sessions).toHaveLength(1);
+      expect((await readSessions({ dir, alive: () => true, procs: wild })).sessions).toHaveLength(0);
+    })();
   });
 
   test("a live pid running something other than claude is dropped", async () => {
@@ -126,7 +128,7 @@ describe("degradation", () => {
 describe("ordering", () => {
   test("T19 blocked sorts by longest wait first, ties broken by sessionId", () => {
     const mk = (id: string, since: number) => ({
-      sessionId: id, pid: 1, name: id, nameSource: "derived", cwd: "/a/b",
+      sessionId: id, pid: 1, name: id, nameSource: "derived", kind: "interactive" as const, cwd: "/a/b",
       status: "waiting" as const, blockedSince: since, startedAt: 0, durationKnown: true,
     });
     const out = blockedOf([mk("bbb", T0 + 100), mk("aaa", T0), mk("ccc", T0)]);
@@ -135,9 +137,23 @@ describe("ordering", () => {
 
   test("non-waiting sessions are not in the blocked list", () => {
     const mk = (st: "busy" | "idle" | "waiting") => ({
-      sessionId: st, pid: 1, name: st, nameSource: "derived", cwd: "/a/b",
+      sessionId: st, pid: 1, name: st, nameSource: "derived", kind: "interactive" as const, cwd: "/a/b",
       status: st, blockedSince: T0, startedAt: 0, durationKnown: true,
     });
     expect(blockedOf([mk("busy"), mk("idle"), mk("waiting")]).map((s) => s.status)).toEqual(["waiting"]);
+  });
+});
+
+describe("parseProcStartUtc", () => {
+  test("parses the ps-style stamp as UTC, not local", () => {
+    expect(parseProcStartUtc("Wed Sep 16 04:51:49 2026")).toBe(Date.UTC(2026, 8, 16, 4, 51, 49));
+  });
+  test("tolerates the padding ps emits for single-digit days", () => {
+    expect(parseProcStartUtc("Mon Sep  7 10:19:51 2026")).toBe(Date.UTC(2026, 8, 7, 10, 19, 51));
+  });
+  test("returns null on anything it does not recognise", () => {
+    expect(parseProcStartUtc("yesterday")).toBeNull();
+    expect(parseProcStartUtc("Wed Xyz 16 04:51:49 2026")).toBeNull();
+    expect(parseProcStartUtc("")).toBeNull();
   });
 });

@@ -47,13 +47,15 @@ function ladderSummary(ladder: readonly number[]): string {
 /** Printed once, at startup. Tells a first-time user what is about to happen. */
 export function header(sessions: Session[], ladder: readonly number[] = LADDER): string[] {
   const projects = new Set(sessions.map((s) => s.cwd)).size;
+  const bg = sessions.filter((s) => s.kind === "background").length;
+  const kinds = bg ? ` (${sessions.length - bg} interactive, ${bg} background)` : "";
   return [
     "",
     `  ${c.cyan(c.bold("agentview"))} ${c.dim("· watching for sessions you have forgotten")}`,
     `  ${c.dim(RULE)}`,
     "",
     `  Watching ${c.bold(String(sessions.length))} Claude session${sessions.length === 1 ? "" : "s"}` +
-      ` across ${c.bold(String(projects))} project${projects === 1 ? "" : "s"}.`,
+      ` across ${c.bold(String(projects))} project${projects === 1 ? "" : "s"}.${c.dim(kinds)}`,
     `  ${c.dim(`If one waits on you, I ping at ${ladderSummary(ladder)} — then stop.`)}`,
     `  ${c.dim("Nothing to configure. Leave this tab open.")}`,
     "",
@@ -64,11 +66,12 @@ function row(s: Session, now: number, longest: boolean): string {
   const where = s.cwd.split("/").filter(Boolean).slice(-2).join("/");
   const name = s.name.length > 26 ? s.name.slice(0, 25) + "…" : s.name;
   const age = s.durationKnown ? humanize(now - s.blockedSince) : "";
+  const tag = s.kind === "background" ? c.dim(" bg") : "";
   if (s.status === "busy") {
-    return `    ${c.green("●")} ${where.padEnd(24)} ${name.padEnd(26)} ${c.green("working")}`;
+    return `    ${c.green("●")} ${where.padEnd(24)} ${name.padEnd(26)} ${c.green("working")}${tag}`;
   }
   const tail = longest ? c.dim(`idle ${age}  ← longest`) : c.dim(`idle ${age}`);
-  return `    ${c.dim("○")} ${c.dim(where.padEnd(24))} ${c.dim(name.padEnd(26))} ${tail}`;
+  return `    ${c.dim("○")} ${c.dim(where.padEnd(24))} ${c.dim(name.padEnd(26))} ${tail}${tag}`;
 }
 
 /** The calm frame: nothing needs you, and here is the proof it is watching. */

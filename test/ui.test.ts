@@ -5,7 +5,7 @@ import type { Session } from "../src/types.ts";
 
 const T0 = 1_700_000_000_000;
 const mk = (name: string, status: Session["status"], hoursAgo: number, id = name): Session => ({
-  sessionId: id, pid: 1, name, nameSource: "derived", cwd: "/Users/x/acme/erp",
+  sessionId: id, pid: 1, name, nameSource: "derived", kind: "interactive" as const, cwd: "/Users/x/acme/erp",
   status, waitingFor: "input needed", blockedSince: T0 - hoursAgo * HOUR,
   startedAt: T0, durationKnown: true,
 });

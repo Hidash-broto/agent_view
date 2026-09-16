@@ -33,6 +33,23 @@ export interface ProcInfo {
   comm: string;
 }
 
+/** `procStart` is the PROCESS start time, written in UTC but formatted as a bare
+ *  local-looking string ("Wed Sep 16 04:51:49 2026"). Parse it as UTC and it matches
+ *  `ps -o lstart=` to the second on every session, interactive or background.
+ *
+ *  Do NOT use `startedAt` for this. That is the SESSION start time, and for a
+ *  background session running on a pre-warmed spare process the two differ by however
+ *  long the spare sat in the pool — measured at 34 minutes on a real machine, which
+ *  a naive guard reads as "this pid was recycled" and silently drops a live session. */
+export function parseProcStartUtc(text: string): number | null {
+  const m = /^\w{3}\s+(\w{3})\s+(\d+)\s+(\d{2}):(\d{2}):(\d{2})\s+(\d{4})$/.exec(text.trim());
+  if (!m) return null;
+  const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  const mo = months.indexOf(m[1]!);
+  if (mo < 0) return null;
+  return Date.UTC(Number(m[6]), mo, Number(m[2]), Number(m[3]), Number(m[4]), Number(m[5]));
+}
+
 /** Liveness without a subprocess. Measured elsewhere at ~100k calls in 44ms. */
 export function aliveDefault(pid: number): boolean {
   try {
@@ -175,12 +192,16 @@ export async function readSessions(opts: ReadOpts = {}): Promise<ReadResult> {
   const sessions: Session[] = [];
 
   for (const o of parsed) {
-    // Pid-reuse guard. Use startedAt (epoch ms) — NEVER procStart, which this file
-    // writes in UTC while formatting it like a local timestamp.
-    if (procs && typeof o.startedAt === "number" && o.startedAt > 0) {
+    // Pid-reuse guard, against the PROCESS start time. procStart when available
+    // (exact, and correct for spare-backed background sessions); startedAt only as
+    // a fallback, with a wide tolerance because it measures something else.
+    if (procs) {
       const p = procs.get(o.pid);
-      if (p) {
-        if (Math.abs(p.startEpoch - o.startedAt) > 5_000) {
+      const procUtc = typeof o.procStart === "string" ? parseProcStartUtc(o.procStart) : null;
+      const expected = procUtc ?? (typeof o.startedAt === "number" && o.startedAt > 0 ? o.startedAt : null);
+      const tolerance = procUtc !== null ? 5_000 : 60 * 60_000;
+      if (p && expected !== null) {
+        if (Math.abs(p.startEpoch - expected) > tolerance) {
           log(`pid ${o.pid} was recycled — dropping stale ${o.sessionId.slice(0, 8)}`);
           continue;
         }
@@ -191,10 +212,16 @@ export async function readSessions(opts: ReadOpts = {}): Promise<ReadResult> {
       }
     }
 
+    // An unclaimed background spare has a session file but has never been used for
+    // anything: kind "bg" with no nameSource, and a name that is just its own id.
+    // There is nothing to neglect, and `claude agents --json` omits it too.
+    if (o.kind === "bg" && !o.nameSource) continue;
+
     const hasTs = typeof o.statusUpdatedAt === "number" && o.statusUpdatedAt > 0;
     sessions.push({
       sessionId: o.sessionId, pid: o.pid, name: o.name ?? o.sessionId.slice(0, 8),
       nameSource: o.nameSource ?? "derived", cwd: o.cwd, status: o.status as Status,
+      kind: o.kind === "bg" ? "background" : "interactive",
       waitingFor: o.waitingFor,
       blockedSince: hasTs ? o.statusUpdatedAt : 0,
       startedAt: typeof o.startedAt === "number" ? o.startedAt : 0,

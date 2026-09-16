@@ -92,3 +92,17 @@ gets used.
 - **Truncation is naive.** `oneLine` clips at a character count, so a long first
   sentence can crowd out the informative part of a prompt. Clipping at a sentence
   boundary would read better.
+
+## Found by use (2026-09-16)
+
+- **The pid-reuse guard was comparing the wrong timestamp.** `startedAt` is the
+  SESSION start; `procStart` is the PROCESS start, written in UTC but formatted as a
+  bare local-looking string. For a background session on a pre-warmed spare the two
+  differed by 34 minutes on a real machine, so the guard concluded the pid had been
+  recycled and silently dropped a live session. Fixed: parse `procStart` as UTC (it
+  matches `ps -o lstart=` to 0.0s on every session, interactive or background), with
+  `startedAt` as a deliberately loose fallback. The earlier design note advising the
+  opposite was wrong and has been corrected in PLAN.md.
+- **Unclaimed background spares are not sessions.** `kind: "bg"` with a null
+  `nameSource` is a pre-warmed process that has never been used. `claude agents
+  --json` omits them; agentview now does too, so the two counts agree.
