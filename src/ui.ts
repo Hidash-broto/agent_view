@@ -8,7 +8,7 @@ import { humanize, absoluteTime } from "./format.ts";
 import { LADDER, MIN, HOUR, SEC } from "./ladder.ts";
 import type { Session } from "./types.ts";
 import type { SessionContext } from "./context.ts";
-import { oneLine } from "./context.ts";
+import { oneLine, shortModel } from "./context.ts";
 
 const useColor =
   process.env.NO_COLOR === undefined &&
@@ -62,28 +62,34 @@ export function header(sessions: Session[], ladder: readonly number[] = LADDER):
   ];
 }
 
-function row(s: Session, now: number, longest: boolean): string {
+function row(s: Session, now: number, longest: boolean, model = ""): string {
   const where = s.cwd.split("/").filter(Boolean).slice(-2).join("/");
   const name = s.name.length > 26 ? s.name.slice(0, 25) + "…" : s.name;
   const age = s.durationKnown ? humanize(now - s.blockedSince) : "";
   const tag = s.kind === "background" ? c.dim(" bg") : "";
+  const mdl = c.dim((model || "").padEnd(9));
   if (s.status === "busy") {
-    return `    ${c.green("●")} ${where.padEnd(24)} ${name.padEnd(26)} ${c.green("working")}${tag}`;
+    return `    ${c.green("●")} ${where.padEnd(24)} ${name.padEnd(26)} ${mdl} ${c.green("working")}${tag}`;
   }
   const tail = longest ? c.dim(`idle ${age}  ← longest`) : c.dim(`idle ${age}`);
-  return `    ${c.dim("○")} ${c.dim(where.padEnd(24))} ${c.dim(name.padEnd(26))} ${tail}${tag}`;
+  return `    ${c.dim("○")} ${c.dim(where.padEnd(24))} ${c.dim(name.padEnd(26))} ${mdl} ${tail}${tag}`;
 }
 
 /** The calm frame: nothing needs you, and here is the proof it is watching. */
-export function calmFrame(sessions: Session[], now: number): string[] {
+export function calmFrame(
+  sessions: Session[],
+  now: number,
+  ctx: Map<string, SessionContext> = new Map()
+): string[] {
   const busy = sessions.filter((s) => s.status === "busy");
   const idle = sessions.filter((s) => s.status === "idle");
   const sortedIdle = [...idle].sort((a, b) => a.blockedSince - b.blockedSince);
   const longest = sortedIdle[0];
 
   const out = [`  ${c.green("✓")} ${c.bold("Nothing is waiting on you.")}`, ""];
-  for (const s of busy) out.push(row(s, now, false));
-  for (const s of sortedIdle) out.push(row(s, now, s === longest && idle.length > 1));
+  const m = (s: Session) => shortModel(ctx.get(s.sessionId)?.model);
+  for (const s of busy) out.push(row(s, now, false, m(s)));
+  for (const s of sortedIdle) out.push(row(s, now, s === longest && idle.length > 1, m(s)));
   out.push("");
   return out;
 }
@@ -106,6 +112,7 @@ export function alertFrame(
     const since = s.durationKnown ? ` · since ${absoluteTime(s.blockedSince, now)}` : "";
     const k = ctx.get(s.sessionId) ?? {};
     const tags = [
+      shortModel(k.model) ? c.dim(shortModel(k.model)) : "",
       k.branch ? c.dim(`branch ${k.branch}`) : "",
       k.pr ? c.dim(`PR #${k.pr}`) : "",
     ].filter(Boolean).join(c.dim(" · "));

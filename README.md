@@ -132,11 +132,13 @@ override, and it depends on nothing Claude Code does.
   `*.key` files at `0600`; agentview globs `*.json` and never lists, opens, or logs
   anything else. [There is a test that asserts it.](test/sessions.test.ts)
 - **Reads the tail of your transcripts** (`~/.claude/projects/*/<id>.jsonl`) to answer
-  "which session is this?" — the last thing you asked, the last thing Claude said, the
-  branch, any PR. Only the final ~256KB of a file is ever touched, only for sessions
-  that are actually blocked, and the content is printed to your terminal and nowhere
-  else. It is never written to the log. If you would rather it did not, there is no
-  flag for that yet — say so and it becomes one.
+  "which session is this, and what model is it on?" — the model, the branch, any PR,
+  the last thing you asked, the last thing Claude said. Only the final ~256KB of a
+  file is ever touched, cached so it is re-read only when the file grows, and the
+  content is printed to your terminal and nowhere else. It is never written to the
+  log. This covers every live session, not only blocked ones, because the model
+  belongs on every row. If you would rather it did not, there is no flag for that yet
+  — say so and it becomes one.
 - **Writes** `~/.agentview/` — `state.json`, `snoozes.json`, `agentview.log`. Nothing else.
 - **Sends** nothing. No network calls, no telemetry, no update check.
   Verify: `grep -rn 'fetch\|http' src/`

@@ -4,7 +4,7 @@ import { renderBlockedRow, renderEmpty, humanize, label, labelWidth } from "./fo
 import { addSnooze, removeSnooze, loadSnoozes } from "./snoozes.ts";
 import { watch } from "./watch.ts";
 import { doctor } from "./doctor.ts";
-import { contextFor, oneLine, wrap } from "./context.ts";
+import { contextFor, oneLine, wrap, shortModel } from "./context.ts";
 import { c } from "./ui.ts";
 import { HOUR, MIN } from "./ladder.ts";
 import type { Session } from "./types.ts";
@@ -75,8 +75,8 @@ async function main(): Promise<number> {
     const k = await contextFor(target.sessionId);
     const where = target.cwd.split("/").filter(Boolean).slice(-2).join("/");
     const dur = target.durationKnown ? humanize(now - target.blockedSince) : "??";
-    const tags = [where, k.branch ? `branch ${k.branch}` : "", k.pr ? `PR #${k.pr}` : ""]
-      .filter(Boolean).join(" · ");
+    const tags = [where, shortModel(k.model), k.branch ? `branch ${k.branch}` : "",
+                  k.pr ? `PR #${k.pr}` : ""].filter(Boolean).join(" · ");
 
     console.log("");
     console.log(`  ${c.bold(target.name)}`);
@@ -154,13 +154,19 @@ async function main(): Promise<number> {
     (s) => s.status === "idle" && s.durationKnown && now - s.blockedSince > 4 * HOUR
   );
 
+  const ctxAll = new Map<string, string>();
+  for (const s of sessions) ctxAll.set(s.sessionId, shortModel((await contextFor(s.sessionId)).model));
+
   if (blocked.length === 0) {
-    console.log(renderEmpty(sessions, now));
+    console.log(renderEmpty(sessions, now, ctxAll));
     // --idle is most useful precisely when nothing is blocked, so honour it here too.
     if (showIdle && idle.length) {
       console.log("");
       for (const s of idle.sort((a, b) => a.blockedSince - b.blockedSince)) {
-        console.log(`  idle    ${humanize(now - s.blockedSince).padStart(4)}  ${label(s)}`);
+        console.log(
+          `  idle    ${humanize(now - s.blockedSince).padStart(4)}  ` +
+            `${(ctxAll.get(s.sessionId) ?? "").padEnd(9)}  ${label(s)}`
+        );
       }
     }
     return 0;
@@ -170,7 +176,7 @@ async function main(): Promise<number> {
   const w = labelWidth(blocked);
   for (const s of blocked) {
     const mark = snoozed.has(s.sessionId) ? "  (snoozed)" : "";
-    console.log(renderBlockedRow(s, now, w) + mark);
+    console.log(renderBlockedRow(s, now, w, ctxAll.get(s.sessionId) ?? "") + mark);
   }
 
   console.log("");
@@ -187,7 +193,10 @@ async function main(): Promise<number> {
   if (showIdle && idle.length) {
     console.log("");
     for (const s of idle) {
-      console.log(`  idle    ${humanize(now - s.blockedSince).padStart(4)}  ${label(s)}`);
+      console.log(
+        `  idle    ${humanize(now - s.blockedSince).padStart(4)}  ` +
+          `${(ctxAll.get(s.sessionId) ?? "").padEnd(9)}  ${label(s)}`
+      );
     }
   }
   if (degraded) console.log("\n  (degraded: durations unavailable — run 'agentview doctor')");

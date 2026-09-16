@@ -25,6 +25,15 @@ export interface SessionContext {
   lastPrompt?: string;
   /** The last thing Claude said in prose (tool calls skipped). */
   lastSay?: string;
+  /** Which model the session is on. Not in the state file or `claude agents --json`
+   *  — only on the transcript's assistant records. */
+  model?: string;
+}
+
+/** "claude-opus-5" -> "opus-5", "claude-haiku-4-5-20251001" -> "haiku-4.5". */
+export function shortModel(raw: string | undefined): string {
+  if (!raw || raw === "<synthetic>") return "";
+  return raw.replace(/^claude-/, "").replace(/-\d{8}$/, "").replace(/(\d)-(\d)/, "$1.$2");
 }
 
 /** Depth 2 only: skips <project>/<sessionId>/subagents/ and memory/. */
@@ -84,6 +93,11 @@ export function extract(lines: string[]): SessionContext {
     if (!out.lastPrompt && o.type === "last-prompt" && typeof o.lastPrompt === "string") {
       out.lastPrompt = o.lastPrompt.trim();
     }
+    if (!out.model && o.type === "assistant") {
+      const m = o.message?.model;
+      // "<synthetic>" marks a locally-generated record, not a real model response.
+      if (typeof m === "string" && m && m !== "<synthetic>") out.model = m;
+    }
     if (!out.lastSay && o.type === "assistant") {
       const txt = (o.message?.content ?? [])
         .filter((c: any) => c?.type === "text" && typeof c.text === "string")
@@ -92,7 +106,7 @@ export function extract(lines: string[]): SessionContext {
         .trim();
       if (txt) out.lastSay = txt;
     }
-    if (out.branch && out.pr && out.lastPrompt && out.lastSay) break;
+    if (out.branch && out.pr && out.lastPrompt && out.lastSay && out.model) break;
   }
   return out;
 }

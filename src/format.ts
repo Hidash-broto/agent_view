@@ -39,12 +39,13 @@ export function label(s: Session): string {
   return `${where}  ${s.name}`;
 }
 
-export function renderBlockedRow(s: Session, now: number, labelWidth = 0): string {
+export function renderBlockedRow(s: Session, now: number, labelWidth = 0, model = ""): string {
   const ms = Math.max(0, now - s.blockedSince);
   const dur = s.durationKnown ? humanize(ms).padStart(4) : "  ??";
   const tag = ms >= 2 * HOUR ? "BLOCKED" : "blocked";
   const since = s.durationKnown ? ` since ${absoluteTime(s.blockedSince, now)}` : "";
-  return `  ${tag} ${dur}  ${label(s).padEnd(labelWidth)}  ${s.waitingFor ?? "input needed"}${since}`;
+  const m = model ? `${model.padEnd(9)}  ` : "";
+  return `  ${tag} ${dur}  ${label(s).padEnd(labelWidth)}  ${m}${s.waitingFor ?? "input needed"}${since}`;
 }
 
 /** Column width is a property of the whole visible set, not of one row. */
@@ -57,7 +58,7 @@ export function labelWidth(rows: Session[]): number {
  * Printing nothing here is indistinguishable from being broken, so it has to show
  * its work: what it can see, and what the worst wait currently is.
  */
-export function renderEmpty(all: Session[], now: number): string {
+export function renderEmpty(all: Session[], now: number, models: Map<string, string> = new Map()): string {
   const busy = all.filter((s) => s.status === "busy").length;
   const idle = all.filter((s) => s.status === "idle").length;
   const lines = ["  Nothing waiting for input.", ""];
@@ -67,8 +68,11 @@ export function renderEmpty(all: Session[], now: number): string {
     .sort((a, b) => a.blockedSince - b.blockedSince)[0];
   if (stalest) {
     const d = humanize(now - stalest.blockedSince);
-    lines.push(`  Longest idle: ${label(stalest)}, ${d} (finished, no prompt since)`);
+    const m = models.get(stalest.sessionId);
+    lines.push(`  Longest idle: ${label(stalest)}${m ? ` (${m})` : ""}, ${d} (finished, no prompt since)`);
   }
+  const distinct = [...new Set([...models.values()].filter(Boolean))].sort();
+  if (distinct.length > 1) lines.push(`  Models in use: ${distinct.join(", ")}`);
   lines.push("", "  agentview watch    notify me when one blocks");
   return lines.join("\n");
 }

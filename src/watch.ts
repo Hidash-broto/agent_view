@@ -108,11 +108,13 @@ export async function watch(opts: WatchOpts = {}): Promise<void> {
     }
     if (changed || heartbeatDue || first) {
       ui.clearStatus();
+      // Every session, not just blocked ones, because the model belongs on every
+      // row. Cached on (mtime, size), so this is one read per session per change.
       const ctx = new Map<string, SessionContext>();
-      for (const b of blockedList) ctx.set(b.sessionId, await contextFor(b.sessionId));
+      for (const s of sessions) ctx.set(s.sessionId, await contextFor(s.sessionId));
       const frame = blockedList.length
         ? ui.alertFrame(blockedList, now, sessions, ctx)
-        : ui.calmFrame(sessions, now);
+        : ui.calmFrame(sessions, now, ctx);
       for (const l of frame) print(l);
       lastSnapshot = snap;
       lastHeartbeat = now;
