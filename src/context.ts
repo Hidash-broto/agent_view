@@ -113,6 +113,12 @@ export function extract(lines: string[]): SessionContext {
 
 const cache = new Map<string, { mtimeMs: number; size: number; ctx: SessionContext }>();
 
+/** Drop everything cached. Used by the manual refresh key, where the whole point is
+ *  to distrust what we already have. */
+export function resetContextCache(): void {
+  cache.clear();
+}
+
 /** Cached on (mtime, size) so a busy session is re-read only when it actually grows. */
 export async function contextFor(sessionId: string): Promise<SessionContext> {
   const path = await findTranscript(sessionId);

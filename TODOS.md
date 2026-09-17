@@ -106,3 +106,13 @@ gets used.
 - **Unclaimed background spares are not sessions.** `kind: "bg"` with a null
   `nameSource` is a pre-warmed process that has never been used. `claude agents
   --json` omits them; agentview now does too, so the two counts agree.
+
+## Found by use (2026-09-17)
+
+- **`watch` redrew far too rarely.** Its change-detection fingerprint covered only
+  sessions in the `waiting` state, so a session starting, a session ending, or any
+  busy/idle transition produced no redraw — the screen, including the session count
+  printed once in the header, could sit hours out of date until the 10-minute
+  heartbeat. Now fingerprints every session's id, status and block time.
+- Manual refresh (`r`) and quit (`q`) added. `r` clears the proc-table and transcript
+  caches first, so it genuinely re-reads rather than redrawing what it already had.

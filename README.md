@@ -39,7 +39,7 @@ $ agentview watch
 
   Watching 3 Claude sessions across 2 projects.
   If one waits on you, I ping at 30s · 30m · 2h · 8h · 24h — then stop.
-  Nothing to configure. Leave this tab open.
+  Leave this tab open.  r = refresh now,  q = quit.
 
   ✓ Nothing is waiting on you.
 
@@ -47,7 +47,7 @@ $ agentview watch
     ○ acme/erp       erp-76       idle 65h  ← longest
     ○ acme/billing   billing-a3   idle 12m
 
-  12:08:31  all clear · 3 sessions · checking every 5s · Ctrl-C to stop
+  12:08:31  all clear · 3 sessions · every 5s · r refresh · q quit
 ```
 
 and when one goes unanswered — with enough context to recognise it without
@@ -82,7 +82,7 @@ Check it: `agentview doctor` should print what it can see. No Homebrew tap yet.
 ```
 agentview                    what is waiting, longest first
 agentview --idle             also show sessions idle over 4h
-agentview watch              run the notifier (Ctrl-C to stop)
+agentview watch              run the notifier  (r = refresh, q = quit)
 agentview snooze erp 4h      quiet one session for a while
 agentview ack erp            "I handled it" — silence this block for good
 agentview unsnooze erp       undo either

@@ -74,3 +74,15 @@ describe("frames", () => {
     expect(statusText(T0, 5, 0, 5000)).toContain("Ctrl-C to stop");
   });
 });
+
+describe("status line", () => {
+  test("advertises the keys when stdin can actually receive them", () => {
+    expect(statusText(T0, 5, 0, 5000, true)).toContain("r refresh");
+    expect(statusText(T0, 5, 0, 5000, true)).toContain("q quit");
+  });
+
+  test("falls back to Ctrl-C when there is no tty to read keys from", () => {
+    expect(statusText(T0, 5, 0, 5000, false)).toContain("Ctrl-C");
+    expect(statusText(T0, 5, 0, 5000, false)).not.toContain("r refresh");
+  });
+});

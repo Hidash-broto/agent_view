@@ -57,7 +57,7 @@ export function header(sessions: Session[], ladder: readonly number[] = LADDER):
     `  Watching ${c.bold(String(sessions.length))} Claude session${sessions.length === 1 ? "" : "s"}` +
       ` across ${c.bold(String(projects))} project${projects === 1 ? "" : "s"}.${c.dim(kinds)}`,
     `  ${c.dim(`If one waits on you, I ping at ${ladderSummary(ladder)} — then stop.`)}`,
-    `  ${c.dim("Nothing to configure. Leave this tab open.")}`,
+    `  ${c.dim("Leave this tab open.  r = refresh now,  q = quit.")}`,
     "",
   ];
 }
@@ -152,12 +152,18 @@ export function notifiedLine(now: number, title: string): string {
 }
 
 /** Bottom line, rewritten in place so it never fills the scrollback. */
-export function statusText(now: number, sessions: number, blocked: number, pollMs: number): string {
-  const state =
-    blocked > 0 ? c.yellow(`${blocked} waiting`) : c.green("all clear");
+export function statusText(
+  now: number,
+  sessions: number,
+  blocked: number,
+  pollMs: number,
+  keys = false
+): string {
+  const state = blocked > 0 ? c.yellow(`${blocked} waiting`) : c.green("all clear");
+  const how = keys ? "r refresh · q quit" : "Ctrl-C to stop";
   return (
     `  ${c.dim(clock(now))}  ${state}${c.dim(
-      ` · ${sessions} session${sessions === 1 ? "" : "s"} · checking every ${Math.round(pollMs / 1000)}s · Ctrl-C to stop`
+      ` · ${sessions} session${sessions === 1 ? "" : "s"} · every ${Math.round(pollMs / 1000)}s · ${how}`
     )}`
   );
 }
