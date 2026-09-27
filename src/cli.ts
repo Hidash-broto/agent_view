@@ -8,6 +8,7 @@ import { contextFor, oneLine, wrap, shortModel } from "./context.ts";
 import { c } from "./ui.ts";
 import { HOUR, MIN } from "./ladder.ts";
 import type { Session } from "./types.ts";
+import pkg from "../package.json";
 
 const USAGE = `agentview — which Claude sessions have been waiting on you, and for how long
 
@@ -19,6 +20,7 @@ const USAGE = `agentview — which Claude sessions have been waiting on you, and
   agentview unsnooze <name> undo either of the above
   agentview show <name>     what this session is about: branch, PR, last exchange
   agentview doctor          check what agentview can see, and what it touches
+  agentview --version       print the version
 `;
 
 function parseDuration(s: string | undefined, fallback: number): number {
@@ -50,6 +52,23 @@ async function main(): Promise<number> {
   if (cmd === "--help" || cmd === "-h" || cmd === "help") {
     console.log(USAGE);
     return 0;
+  }
+
+  if (cmd === "--version" || cmd === "-v" || cmd === "version") {
+    console.log(`agentview ${pkg.version}`);
+    return 0;
+  }
+
+  // An unknown flag used to fall through to the default list, so `agentview --json`
+  // printed the list and looked like it had worked. Say no instead.
+  const KNOWN_FLAGS = new Set(["--idle"]);
+  const unknown = [cmd, ...rest].find(
+    (a) => a !== undefined && a.startsWith("-") && !KNOWN_FLAGS.has(a)
+  );
+  if (unknown !== undefined) {
+    console.error(`agentview: unknown option "${unknown}".\n`);
+    console.error(USAGE);
+    return 2;
   }
 
   if (cmd === "doctor") {

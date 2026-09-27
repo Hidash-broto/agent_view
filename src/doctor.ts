@@ -30,7 +30,7 @@ export async function doctor(now = Date.now()): Promise<DoctorReport> {
   lines.push(`  ${STATE_PATH}`);
   lines.push(`  ${SNOOZE_PATH}`);
   lines.push(`  ${DIR}/agentview.log`);
-  lines.push("Sends: nothing. No network calls. Verify with: grep -rn 'fetch\\|http' src/");
+  lines.push("Sends: nothing. No network calls. Verify with: grep -rnE 'fetch\\(|https?://' src/");
   lines.push("");
 
   const { config, source, warnings } = await loadConfig(DEFAULT_CONFIG);

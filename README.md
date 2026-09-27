@@ -88,6 +88,7 @@ agentview ack erp            "I handled it" — silence this block for good
 agentview unsnooze erp       undo either
 agentview show erp           what this session is about: branch, PR, last exchange
 agentview doctor             what it can see, and everything it touches
+agentview --version          print the version
 ```
 
 Names take a prefix, so `agentview ack erp` is enough. It resolves against the live
@@ -141,7 +142,7 @@ override, and it depends on nothing Claude Code does.
   — say so and it becomes one.
 - **Writes** `~/.agentview/` — `state.json`, `snoozes.json`, `agentview.log`. Nothing else.
 - **Sends** nothing. No network calls, no telemetry, no update check.
-  Verify: `grep -rn 'fetch\|http' src/`
+  Verify: `grep -rnE 'fetch\(|https?://' src/`
 
 `agentview doctor` prints all of the above, every time.
 
@@ -180,20 +181,24 @@ honest cost of `bun build --compile`; a Go or Rust build would be a few MB.
   cannot currently tell.
 - **`watch` runs in the foreground** and dies with your terminal. No launchd yet.
 - **macOS only.**
+- **It reads a file format it does not own.** `~/.claude/sessions/*.json` is Claude
+  Code's internal state, not a documented API, and a Claude Code update can change or
+  move it with no warning. If agentview goes quiet or `doctor` reports 0 session files
+  after an upgrade, that is the likely cause — open an issue with your `doctor` output.
 
 Every one of these is in [TODOS.md](TODOS.md) with its real cost.
 
 ## Development
 
 ```bash
-bun test        # 44 tests
+bun test        # 91 tests
 ```
 
-Fourteen of them guard failures that *look like success*: a re-blocked session that
-silently never notifies, a cold start reporting "30m" about a day-old block, a
-recycled pid producing a phantom that escalates forever, a crash recovering into a
-notification storm. Those run first in `tick.test.ts` and `state.test.ts` for a
-reason — everything else fails loudly and you would notice.
+Fourteen of them — the `T`-numbered ones — guard failures that *look like success*:
+a re-blocked session that silently never notifies, a cold start reporting "30m" about
+a day-old block, a recycled pid producing a phantom that escalates forever, a crash
+recovering into a notification storm. Those run first in `tick.test.ts` and
+`state.test.ts` for a reason — everything else fails loudly and you would notice.
 
 ## License
 
